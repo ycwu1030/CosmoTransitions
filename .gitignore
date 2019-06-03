@@ -2,3 +2,4 @@
 *.dat
 *.dat.txt
 doc/_build/
+.DS_Store

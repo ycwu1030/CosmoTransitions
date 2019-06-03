@@ -689,6 +689,7 @@ def _tunnelFromPhaseAtT(T, phases, start_phase, V, dV,
                 dotij = np.sum((xj-x0)*(xi-x0))
                 if dotij >= np.sqrt(xi2*xj2) * cos_overlap:
                     excluded.append(i if xi2 > xj2 else j)
+        excluded=list(set(excluded))
         for i in sorted(excluded)[::-1]:
             del tunnel_list[i]
     # Get rid of the T parameter for V and dV
