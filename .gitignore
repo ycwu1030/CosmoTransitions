@@ -1,5 +1,6 @@
 *.pyc
 *.dat
 *.dat.txt
+Test/
 doc/_build/
 .DS_Store
