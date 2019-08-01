@@ -633,6 +633,7 @@ class generic_potential():
             xhigh = trans['high_vev']
             trans['Delta_rho'] = self.energyDensity(xhigh,T,False) \
                 - self.energyDensity(xlow,T,False)
+            trans['alpha_GW'] = trans['Delta_rho']*30.0/(T**4*100.0*np.pi*np.pi)
             trans['Delta_p'] = self.Vtot(xhigh,T,False) \
                 - self.Vtot(xlow,T,False)
         return self.TnTrans
