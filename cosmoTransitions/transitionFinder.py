@@ -21,6 +21,7 @@ from collections import namedtuple
 
 import numpy as np
 from scipy import linalg, interpolate, optimize
+from scipy.misc import derivative
 
 from . import pathDeformation
 from . import tunneling1D
@@ -872,6 +873,15 @@ def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
             # tunneling happens right away at Tmax
             Tnuc = Tmax
     rdict = outdict[Tnuc]
+    rdict['betaHn_GW'] = 0.0
+    if rdict['trantype'] == 1:
+        outdict_tmp = {}
+        low_phase_key = rdict['low_phase']
+        low_phase_dic = {low_phase_key:phases[low_phase_key]}
+        args = (low_phase_dic, start_phase, V, dV,
+                phitol, overlapAngle, lambda S,T: S/(T+1e-100),
+                fullTunneling_params, verbose, outdict_tmp)
+        rdict['betaHn_GW'] = Tnuc*derivative(_tunnelFromPhaseAtT,Tnuc,dx=1e-3,n=1,args=args)
     return rdict if rdict['trantype'] > 0 else None
 
 
@@ -887,6 +897,7 @@ def secondOrderTrans(high_phase, low_phase, Tstr='Tnuc'):
     rdict['action'] = 0.0
     rdict['instanton'] = None
     rdict['trantype'] = 2
+    rdict['betaHn_GW'] = 0.0
     return rdict
 
 
