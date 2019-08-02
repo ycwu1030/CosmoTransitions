@@ -881,7 +881,10 @@ def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
         args = (low_phase_dic, start_phase, V, dV,
                 phitol, overlapAngle, lambda S,T: S/(T+1e-100),
                 fullTunneling_params, verbose, outdict_tmp)
-        rdict['betaHn_GW'] = Tnuc*derivative(_tunnelFromPhaseAtT,Tnuc,dx=1e-3,n=1,args=args)
+        try:
+            rdict['betaHn_GW'] = Tnuc*derivative(_tunnelFromPhaseAtT,Tnuc,dx=1e-3,n=1,args=args)
+        except:
+            rdict['betaHn_GW'] = 0.0
     return rdict if rdict['trantype'] > 0 else None
 
 
