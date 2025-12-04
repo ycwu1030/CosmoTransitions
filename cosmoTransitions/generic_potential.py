@@ -547,15 +547,16 @@ class generic_potential():
             identified by a unique key. This value is also stored in
             `self.phases`.
         """
+        tmin = 1.0
         tstop = self.Tmax
         points = []
         for x0 in self.approxZeroTMin():
-            points.append([x0,0.0])
+            points.append([x0,tmin])
         tracingArgs_ = dict(forbidCrit=self.forbidPhaseCrit)
         tracingArgs_.update(tracingArgs)
         phases = transitionFinder.traceMultiMin(
             self.Vtot, self.dgradV_dT, self.d2V, points,
-            tLow=0.0, tHigh=tstop, deltaX_target=100*self.x_eps,
+            tLow=tmin, tHigh=tstop, deltaX_target=100*self.x_eps,
             **tracingArgs_)
         self.phases = phases
         transitionFinder.removeRedundantPhases(

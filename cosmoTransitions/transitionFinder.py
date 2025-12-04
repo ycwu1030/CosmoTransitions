@@ -21,7 +21,7 @@ from collections import namedtuple
 
 import numpy as np
 from scipy import linalg, interpolate, optimize
-from scipy.misc import derivative
+
 
 from . import pathDeformation
 from . import tunneling1D
@@ -277,7 +277,7 @@ class Phase:
             dXdTstr = "[%s, ..., %s]" % (self.dXdT[0], self.dXdT[-1])
         else:
             dXdTstr = "[%s]" % self.dXdT[0]
-        s = "Phase(key=%s, X=%s, T=%s, dXdT=%s" % (
+        s = "Phase(key=%s, X=%s, T=%s, dXdT=%s)" % (
             self.key, Xstr, Tstr, dXdTstr)
         np.set_printoptions(**popts)
         return s
@@ -376,11 +376,11 @@ def traceMultiMin(f, d2f_dxdt, d2f_dx2,
                 break
         else:
             # The point is not already covered. Trace the phase.
-            print("Tracing phase starting at x =", x1, "; t =", t1)
+            # print("Tracing phase starting at x =", x1, "; t =", t1)
             phase_key = len(phases)
             oldNumPoints = len(nextPoint)
             if (t1 > tLow):
-                print("Tracing minimum down")
+                # print("Tracing minimum down")
                 down_trace = traceMinimum(f, d2f_dxdt, d2f_dx2, x1,
                                           t1, tLow, -dt1, deltaX_target,
                                           **single_trace_args)
@@ -395,7 +395,7 @@ def traceMultiMin(f, d2f_dxdt, d2f_dx2,
                 T_down = T_down[::-1]
                 dXdT_down = dXdT_down[::-1]
             if (t1 < tHigh):
-                print("Tracing minimum up")
+                # print("Tracing minimum up")
                 up_trace = traceMinimum(f, d2f_dxdt, d2f_dx2, x1,
                                         t1, tHigh, +dt1, deltaX_target,
                                         **single_trace_args)
@@ -702,10 +702,10 @@ def _tunnelFromPhaseAtT(T, phases, start_phase, V, dV,
     for tdict in tunnel_list:
         x1 = tdict['low_vev']
         try:
-            print("Tunneling from phase %s to phase %s at T=%0.7g"
-                  % (tdict['high_phase'], tdict['low_phase'], T))
-            print("high_vev =", tdict['high_vev'])
-            print("low_vev =", tdict['low_vev'])
+            # print("Tunneling from phase %s to phase %s at T=%0.7g"
+                #   % (tdict['high_phase'], tdict['low_phase'], T))
+            # print("high_vev =", tdict['high_vev'])
+            # print("low_vev =", tdict['low_vev'])
             tobj = pathDeformation.fullTunneling(
                 [x1,x0], V_, dV_, callback_data=T,
                 **fullTunneling_params)
@@ -881,10 +881,66 @@ def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
         args = (low_phase_dic, start_phase, V, dV,
                 phitol, overlapAngle, lambda S,T: S/(T+1e-100),
                 fullTunneling_params, verbose, outdict_tmp)
-        try:
-            rdict['betaHn_GW'] = Tnuc*derivative(_tunnelFromPhaseAtT,Tnuc,dx=1e-3,n=1,args=args)
-        except:
+        # try:
+        def for_derivative(T):
+            try:
+                return _tunnelFromPhaseAtT(T, *args)
+            except Exception:
+                return float('nan')
+
+        def _numeric_derivative(func, x0, rel_step=1e-3, abs_step=1e-6, max_attempts=8):
+            """Robust central-difference derivative of func at x0.
+
+            Tries progressively smaller step sizes if evaluations fail or
+            return non-finite values. Returns (df, success).
+            """
+            # coerce x0 to scalar float if it's an array-like
+            try:
+                x0 = float(np.asarray(x0).ravel()[0])
+            except Exception:
+                try:
+                    x0 = float(x0)
+                except Exception:
+                    return 0.0, False
+
+            h = max(abs_step, abs(x0) * rel_step)
+            for _ in range(max_attempts):
+                xm = x0 - h
+                xp = x0 + h
+                try:
+                    fm = func(xm)
+                    fp = func(xp)
+                except Exception:
+                    fm = fp = float('nan')
+
+                # Try to coerce to floats
+                try:
+                    fm = float(fm)
+                except Exception:
+                    fm = float('nan')
+                try:
+                    fp = float(fp)
+                except Exception:
+                    fp = float('nan')
+
+                if np.isfinite(fm) and np.isfinite(fp):
+                    return ((fp - fm) / (2.0 * h), True)
+
+                # try smaller step size
+                h /= 10.0
+
+            return (0.0, False)
+
+        df, ok = _numeric_derivative(for_derivative, Tnuc)
+        if ok and np.isfinite(df):
+            rdict['betaHn_GW'] = float(Tnuc) * float(df)
+            print("Computed betaHn_GW =", df, "->", rdict['betaHn_GW'], "at Tnuc =", Tnuc)
+        else:
             rdict['betaHn_GW'] = 0.0
+            print("Could not compute betaHn_GW at Tnuc =", Tnuc, "; defaulting to 0.0")
+        # except Exception as e:
+            # print("Could not compute betaHn_GW due to exception:", e)
+            # rdict['betaHn_GW'] = 0.0
     return rdict if rdict['trantype'] > 0 else None
 
 

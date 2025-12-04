@@ -126,7 +126,7 @@ class SingleFieldInstanton:
         plt.show()
     """
     def __init__(self, phi_absMin, phi_metaMin, V,
-                 dV=None, d2V=None, phi_eps=1e-3, alpha=2,
+                 dV=None, d2V=None, phi_eps=1e-4, alpha=2,
                  phi_bar=None, rscale=None):
         self.phi_absMin, self.phi_metaMin = phi_absMin, phi_metaMin
         self.V = V
@@ -612,7 +612,7 @@ class SingleFieldInstanton:
         rval = (R,)+tuple(Yout.T)+eqn_args+(Rerr,)
         return self.profile_rval(*rval)
 
-    def findProfile(self, xguess=None, xtol=1e-4, phitol=1e-4,
+    def findProfile(self, xguess=None, xtol=1e-6, phitol=1e-6,
                     thinCutoff=.01, npoints=500, rmin=1e-4, rmax=1e4,
                     max_interior_pts=None):
         R"""

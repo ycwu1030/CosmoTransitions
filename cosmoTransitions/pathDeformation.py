@@ -324,7 +324,7 @@ class Deformation_Spline:
 
     def deformPath(self, startstep=2e-3,
                    fRatioConv=.02, converge_0=5., fRatioIncrease=5.,
-                   maxiter=500, verbose=True, callback=None, step_params={}):
+                   maxiter=500, verbose=False, callback=None, step_params={}):
         """
         Deform the path many individual steps, stopping either when the
         convergence criterium is reached, when the maximum number of iterations
@@ -543,7 +543,7 @@ class Deformation_Points:
 
     def deformPath(self, startstep=.1, minstep=1e-6, step_increase=1.5,
                    fRatioConv=.02, converge_0=5., fRatioIncrease=20.,
-                   maxiter=500, verbose=1, callback=None, step_params={}):
+                   maxiter=500, verbose=0, callback=None, step_params={}):
         """
         Deform the path many individual steps, stopping either when the
         convergence criterium is reached, when the maximum number of iterations

@@ -4,3 +4,4 @@
 Test/
 doc/_build/
 .DS_Store
+.vscode/
