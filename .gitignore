@@ -1,8 +1,7 @@
 *.pyc
 *.dat
 *.dat.txt
-Test/
+Test
 doc/_build/
 .DS_Store
 .vscode/
-ConformalTest/
