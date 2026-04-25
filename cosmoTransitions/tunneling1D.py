@@ -39,7 +39,7 @@ class PotentialError(Exception):
 
 
 class SingleFieldInstanton:
-    """
+    r"""
     This class will calculate properties of an instanton with a single scalar
     Field without gravity using the overshoot/undershoot method.
 

@@ -33,7 +33,8 @@ def setDefaultArgs(func, **kwargs):
       The world has changed!
     """
     import inspect
-    args, varargs, varkwargs, defaults = inspect.getargspec(func)
+    spec = inspect.getfullargspec(func)
+    args, defaults = spec.args, spec.defaults
     have_defaults = args[-len(defaults):]
     defaults = list(defaults)  # so that we can write to it
     for kwd in kwargs:
@@ -302,7 +303,7 @@ def deriv14_const_dx(y, dx=1.0):
 
 
 def deriv1n(y,x,n):
-    """
+    r"""
     Calculates :math:`dy/dx` to nth-order in :math:`\Delta x` using
     finite differences. The derivative is taken along the last dimension of `y`.
 
@@ -343,7 +344,7 @@ def deriv1n(y,x,n):
 
 
 def deriv23(y,x):
-    """
+    r"""
     Calculates :math:`d^2y/dx^2` to third-order in :math:`\Delta x` using
     finite differences. The derivative is taken along the last dimension of `y`.
 
@@ -380,7 +381,7 @@ def deriv23(y,x):
 
 
 def deriv23_const_dx(y, dx=1.0):
-    """
+    r"""
     Calculates :math:`d^2y/dx^2` to third-order in :math:`\Delta x` using
     finite differences. The derivative is taken along the last dimension of `y`.
 
