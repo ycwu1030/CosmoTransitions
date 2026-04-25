@@ -134,9 +134,9 @@ class TestModel1Phases:
             assert ph.X.shape[1] == 2
 
     def test_phase0_T_range(self, model1_phases):
-        """Baseline: Phase 0 covers T=[1.0, 117.2]."""
+        """Baseline: Phase 0 covers T=[0.0, 117.2]."""
         ph = model1_phases[0]
-        assert ph.T.min() == pytest.approx(1.0, abs=0.5)
+        assert ph.T.min() == pytest.approx(0.0, abs=0.5)
         assert ph.T.max() == pytest.approx(117.2, abs=2.0)
 
     def test_phase2_high_T_near_zero_vev(self, model1_phases):

@@ -25,7 +25,7 @@ except ImportError:
     from scipy.integrate import simps as simpson
 
 from . import helper_functions
-from .helper_functions import rkqs, IntegrationError, clampVal
+from .helper_functions import rkqs, rkqs_pi, IntegrationError, clampVal
 from .helper_functions import cubicInterpFunction
 
 
@@ -284,13 +284,22 @@ class SingleFieldInstanton:
             raise PotentialError("Barrier height is not positive, "
                                  "does not exist.", "no barrier")
         rscale1 = abs(xtop) / np.sqrt(abs(6*Vtop))
+        # S-8: fallback for flat-top/conformal barriers where rscale1 → 0.
+        # Use curvature at the metastable minimum as a lower bound on rscale,
+        # but only when d2V_meta gives a finite, smaller-than-rscale1 result.
+        _eps = abs(self.phi_metaMin - self.phi_absMin) * 1e-4
+        if _eps > 0:
+            _d2V_meta = (-self.V(self.phi_metaMin - 2*_eps)
+                         + 16*self.V(self.phi_metaMin - _eps)
+                         - 30*self.V(self.phi_metaMin)
+                         + 16*self.V(self.phi_metaMin + _eps)
+                         - self.V(self.phi_metaMin + 2*_eps)) / (12.*_eps*_eps)
+            if 0 < _d2V_meta < np.inf:
+                rscale_meta = 1.0 / np.sqrt(_d2V_meta)
+                # Only boost rscale1 if it's smaller; cap the boost at 100x
+                if rscale_meta < rscale1 * 100:
+                    rscale1 = max(rscale1, rscale_meta)
         return rscale1
-        # The following would calculate it a separate way, but this goes
-        # to infinity when delta_V goes to zero, so it's a bad way of doing it
-        delta_phi = abs(self.phi_absMin - self.phi_metaMin)
-        delta_V = abs(self.V(self.phi_absMin) - self.V(self.phi_metaMin))
-        rscale2 = np.sqrt(2*delta_phi**2 / (delta_V+1e-100))
-        return max(rscale1, rscale2)
 
     _exactSolution_rval = namedtuple("exactSolution_rval", "phi dphi")
     def exactSolution(self, r, phi0, dV, d2V):
@@ -336,7 +345,8 @@ class SingleFieldInstanton:
 
         """
         beta = np.sqrt(abs(d2V))
-        beta_r = beta*r
+        with np.errstate(over='ignore'):
+            beta_r = beta*r
         nu = 0.5 * (self.alpha - 1)
         gamma = special.gamma  # Gamma function
         iv, jv = special.iv, special.jv  # (modified) Bessel function
@@ -420,7 +430,8 @@ class SingleFieldInstanton:
         r = rmin
         while np.isfinite(r):
             rlast = r
-            r *= 10
+            with np.errstate(over='ignore'):
+                r *= 10
             phi, dphi = self.exactSolution(r, phi0, dV, d2V)
             if abs(phi - self.phi_absMin) > abs(delta_phi_cutoff):
                 break
@@ -498,8 +509,11 @@ class SingleFieldInstanton:
         rmax += r0
 
         convergence_type = None
+        _errmax_prev = None  # PI controller state
         while True:
-            dy, dr, drnext = rkqs(y0, dydr0, r0, dY, dr, epsfrac, epsabs)
+            _rk = rkqs_pi(y0, dydr0, r0, dY, dr, epsfrac, epsabs,
+                          errmax_prev=_errmax_prev)
+            dy, dr, drnext, _errmax_prev = _rk.Delta_y, _rk.Delta_t, _rk.dtnxt, _rk.errmax
             r1 = r0 + dr
             y1 = y0 + dy
             dydr1 = dY(y1,r1)
@@ -518,11 +532,17 @@ class SingleFieldInstanton:
                 f = cubicInterpFunction(y0, dr*dydr0, y1, dr*dydr1)
                 if(y1[1]*ysign > 0):
                     # Extrapolate to where dphi(r) = 0
-                    x = optimize.brentq(lambda x: f(x)[1], 0, 1)
+                    try:
+                        x = optimize.brentq(lambda x: f(x)[1], 0, 1)
+                    except ValueError:
+                        x = 1.0  # S-11: endpoints same sign; use end of step
                     convergence_type = "undershoot"
                 else:
                     # Extrapolate to where phi(r) = phi_metaMin
-                    x = optimize.brentq(lambda x: f(x)[0]-self.phi_metaMin, 0,1)
+                    try:
+                        x = optimize.brentq(lambda x: f(x)[0]-self.phi_metaMin, 0, 1)
+                    except ValueError:
+                        x = 1.0  # S-11: endpoints same sign; use end of step
                     convergence_type = "overshoot"
                 r = r0 + dr*x
                 y = f(x)
@@ -586,18 +606,23 @@ class SingleFieldInstanton:
             return self.equationOfMotion(y,r,*args)
         dydr0 = dY(y0, r0)
         Rerr = None
+        _errmax_prev = None  # PI controller state
 
         i = 1
         while i < N:
-            dy, dr, drnext = rkqs(y0, dydr0, r0, dY, dr, epsfrac, epsabs)
+            _rk = rkqs_pi(y0, dydr0, r0, dY, dr, epsfrac, epsabs,
+                          errmax_prev=_errmax_prev)
+            dy, dr, drnext = _rk.Delta_y, _rk.Delta_t, _rk.dtnxt
+            _errmax_prev = _rk.errmax
             if (dr >= drmin):
                 r1 = r0 + dr
                 y1 = y0 + dy
             else:
-                y1 = y0 + dy*drmin/dr
+                # Force step to drmin using forward Euler (S-5 fix)
+                y1 = y0 + dydr0 * drmin
                 dr = drnext = drmin
                 r1 = r0 + dr
-                if Rerr is not None: Rerr = r1
+                if Rerr is None: Rerr = r1  # S-4 fix: was "is not None"
             dydr1 = dY(y1,r1)
             # Fill the arrays, if necessary
             if (r0 < R[i] <= r1):
@@ -708,9 +733,14 @@ class SingleFieldInstanton:
             # The sign for delta_phi_cutoff doesn't matter
         # --
         integration_args = (dr0, epsfrac, epsabs, drmin, rmax)
+        _rmax_doublings = 0  # S-7: track how many times we've doubled rmax
         rf = None
         while True:
             delta_phi0 = np.exp(-x)*delta_phi
+            if delta_phi0 == 0.0:
+                # S-6: x has exceeded float range; field can't move — treat as
+                # undershoot and exit bisection with best available result
+                break
             # r0, phi0, dphi0 = self.initialConditions(x, rmin, thinCutoff)
             r0_, phi0, dphi0 = self.initialConditions(
                 delta_phi0, rmin, delta_phi_cutoff)
@@ -722,7 +752,20 @@ class SingleFieldInstanton:
                 break
             r0 = r0_
             y0 = np.array([phi0, dphi0])
-            rf, yf, ctype = self.integrateProfile(r0, y0, *integration_args)
+            try:  # S-3: IntegrationError can be raised by integrateProfile
+                rf, yf, ctype = self.integrateProfile(r0, y0, *integration_args)
+            except IntegrationError as _ie:
+                if "r > rmax" in str(_ie) and _rmax_doublings < 8:
+                    # S-7: bubble is larger than rmax; double it and retry
+                    rmax *= 2.0
+                    _rmax_doublings += 1
+                    integration_args = (dr0, epsfrac, epsabs, drmin, rmax)
+                    continue
+                # dr < drmin or rmax exhausted: treat as undershoot
+                ctype = "undershoot"
+                if rf is None:
+                    # No result yet; can't continue bisection
+                    raise
             # Check for overshoot, undershoot
             if ctype == "converged":
                 break
@@ -788,6 +831,12 @@ class SingleFieldInstanton:
             The Euclidean action.
         """
         r, phi, dphi = profile.R, profile.Phi, profile.dPhi
+        # Guard against NaN/inf in the profile (S-12)
+        mask = np.isfinite(phi) & np.isfinite(dphi) & np.isfinite(r)
+        if not mask.all():
+            r, phi, dphi = r[mask], phi[mask], dphi[mask]
+        if len(r) < 2:
+            return np.nan
         # Find the area of an n-sphere (alpha=n):
         d = self.alpha+1  # Number of dimensions in the integration
         area = r**self.alpha * 2*np.pi**(d*.5)/special.gamma(d*.5)

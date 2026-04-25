@@ -544,7 +544,7 @@ class generic_potential():
             identified by a unique key. This value is also stored in
             `self.phases`.
         """
-        tmin = 1.0
+        tmin = 0.0
         tstop = self.Tmax
         points = []
         for x0 in self.approxZeroTMin():
