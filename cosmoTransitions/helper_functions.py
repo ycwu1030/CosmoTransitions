@@ -172,6 +172,67 @@ def rkqs(y,dydt,t,f, dt_try, epsfrac, epsabs, args=()):
     return _rkqs_rval(dy, dt, dtnext)
 
 
+_rkqs_pi_rval = namedtuple("rkqs_pi_rval", "Delta_y Delta_t dtnxt errmax")
+
+def rkqs_pi(y, dydt, t, f, dt_try, epsfrac, epsabs, args=(), errmax_prev=None):
+    """
+    Like :func:`rkqs`, but uses a PI (proportional-integral) step-size
+    controller for smoother step sequences (Söderlind 2002).
+
+    Parameters
+    ----------
+    y, dydt, t, f, dt_try, epsfrac, epsabs, args :
+        Same as :func:`rkqs`.
+    errmax_prev : float or None, optional
+        Normalised error from the *previous* accepted step.  When provided,
+        the PI controller blends the current error with the previous one,
+        reducing step-size oscillations.  Pass ``None`` (default) on the
+        very first step – falls back to the classical I-controller for that
+        step only.
+
+    Returns
+    -------
+    rkqs_pi_rval
+        Named tuple with fields ``Delta_y``, ``Delta_t``, ``dtnxt``,
+        ``errmax``.  Pass ``errmax`` as ``errmax_prev`` in the next call.
+
+    References
+    ----------
+    G. Söderlind, "Automatic control and adaptive time-stepping",
+    Numerical Algorithms 31 (2002) 281–310.
+    """
+    # Söderlind PI exponents for a 5th-order method
+    _KI = 0.4 / 5   # = 0.08
+    _KP = 0.3 / 5   # = 0.06
+
+    dt = dt_try
+    while True:
+        dy, yerr = _rkck(y, dydt, t, f, dt, args)
+        errmax = np.nan_to_num(np.max(np.min([
+            abs(yerr / epsabs),
+            abs(yerr) / ((abs(y) + 1e-300) * epsfrac)
+        ], axis=0)))
+        if errmax < 1.0:
+            break  # step accepted
+        dttemp = 0.9 * dt * errmax ** -.25
+        dt = max(dttemp, dt * .1) if dt > 0 else min(dttemp, dt * .1)
+        if t + dt == t:
+            raise IntegrationError("Stepsize rounds down to zero.")
+
+    # PI controller (or I-only on first step)
+    if errmax_prev is not None and errmax_prev > 0:
+        scale = 0.9 * (errmax + 1e-300) ** -_KI * (errmax_prev + 1e-300) ** _KP
+        dtnext = dt * min(scale, 5.0)
+    else:
+        # I-controller fallback (identical to rkqs)
+        if errmax > 1.89e-4:
+            dtnext = 0.9 * dt * errmax ** -.2
+        else:
+            dtnext = 5.0 * dt
+
+    return _rkqs_pi_rval(dy, dt, dtnext, errmax)
+
+
 def rkqs2(y,dydt,t,f, dt_try, inv_epsabs, args=()):
     """
     Same as :func:`rkqs`, but ``inv_epsabs = 1/epsabs`` and ``epsfrac`` is
@@ -547,6 +608,127 @@ class hessianFunction:
         return y
 
 
+def adaptive_gradient(f, x, eps_rel=1e-5, eps_abs=1e-8, order=4, args=()):
+    """
+    Calculate the gradient of a scalar function using an adaptive step size.
+
+    The step size for dimension *i* is chosen as
+    ``h_i = eps_rel * |x_i| + eps_abs``, which balances truncation and
+    cancellation errors across different scales of ``x``.
+
+    Parameters
+    ----------
+    f : callable
+        Scalar function.  Signature ``f(x, *args)`` where ``x`` is a 1-D
+        array of length ``Ndim``.
+    x : array_like, shape (Ndim,)
+        Point at which to evaluate the gradient.
+    eps_rel : float, optional
+        Relative component of the step size.  Default 1e-5.
+    eps_abs : float, optional
+        Absolute floor for the step size (prevents h→0 when x_i=0).
+        Default 1e-8.
+    order : {2, 4}, optional
+        Finite-difference order.  Default 4.
+    args : tuple, optional
+        Extra arguments forwarded to *f*.
+
+    Returns
+    -------
+    grad : np.ndarray, shape (Ndim,)
+        Gradient of *f* at *x*.
+    """
+    assert order in (2, 4)
+    x = np.asarray(x, dtype=float)
+    Ndim = x.shape[0]
+    h = eps_rel * np.abs(x) + eps_abs
+    grad = np.empty(Ndim)
+    if order == 2:
+        coef = np.array([-0.5, 0.5])
+        offsets = np.array([-1.0, 1.0])
+    else:
+        coef = np.array([1.0, -8.0, 8.0, -1.0]) / 12.0
+        offsets = np.array([-2.0, -1.0, 1.0, 2.0])
+    for i in range(Ndim):
+        pts = x[np.newaxis, :] + (offsets[:, np.newaxis]
+                                   * (h[i] * np.eye(Ndim)[i]))
+        vals = np.array([f(pts[k], *args) for k in range(len(offsets))])
+        grad[i] = np.dot(coef, vals) / h[i]
+    return grad
+
+
+def adaptive_hessian(f, x, eps_rel=1e-4, eps_abs=1e-6, order=4, args=()):
+    """
+    Calculate the Hessian matrix of a scalar function using an adaptive step
+    size.
+
+    Uses the same ``h_i = eps_rel * |x_i| + eps_abs`` scaling as
+    :func:`adaptive_gradient`.  Diagonal entries use the standard symmetric
+    second-derivative formula; off-diagonal entries use the mixed partial
+    formula.
+
+    Parameters
+    ----------
+    f : callable
+        Scalar function.  Signature ``f(x, *args)``.
+    x : array_like, shape (Ndim,)
+        Point at which to evaluate the Hessian.
+    eps_rel : float, optional
+        Relative component of the step size.  Default 1e-4.
+    eps_abs : float, optional
+        Absolute floor.  Default 1e-6.
+    order : {2, 4}, optional
+        Finite-difference order.  Default 4.
+    args : tuple, optional
+        Extra arguments forwarded to *f*.
+
+    Returns
+    -------
+    hess : np.ndarray, shape (Ndim, Ndim)
+        Symmetric Hessian matrix of *f* at *x*.
+    """
+    assert order in (2, 4)
+    x = np.asarray(x, dtype=float)
+    Ndim = x.shape[0]
+    h = eps_rel * np.abs(x) + eps_abs
+    hess = np.empty((Ndim, Ndim))
+
+    # Diagonal: d²f/dx_i²
+    if order == 2:
+        d_coef = np.array([1.0, -2.0, 1.0])
+        d_off = np.array([-1.0, 0.0, 1.0])
+    else:
+        d_coef = np.array([-1.0, 16.0, -30.0, 16.0, -1.0]) / 12.0
+        d_off = np.array([-2.0, -1.0, 0.0, 1.0, 2.0])
+    for i in range(Ndim):
+        pts = x[np.newaxis, :] + (d_off[:, np.newaxis]
+                                   * (h[i] * np.eye(Ndim)[i]))
+        vals = np.array([f(pts[k], *args) for k in range(len(d_off))])
+        hess[i, i] = np.dot(d_coef, vals) / (h[i] * h[i])
+
+    # Off-diagonal: mixed partials via cross-difference formula
+    if order == 2:
+        x_off = np.array([-1.0, 1.0])
+        cross_coef = np.array([-0.5, 0.5])
+    else:
+        x_off = np.array([-2.0, -1.0, 1.0, 2.0])
+        cross_coef = np.array([1.0, -8.0, 8.0, -1.0]) / 12.0
+    for i in range(Ndim):
+        for j in range(i):
+            # d²f/dx_i dx_j ≈ (1/h_j) * d/dx_j [df/dx_i]
+            val = 0.0
+            for k, (oj, cj) in enumerate(zip(x_off, cross_coef)):
+                xj = x.copy()
+                xj[j] += oj * h[j]
+                pts_i = xj[np.newaxis, :] + (x_off[:, np.newaxis]
+                                              * (h[i] * np.eye(Ndim)[i]))
+                vals_i = np.array([f(pts_i[m], *args) for m in range(len(x_off))])
+                val += cj * np.dot(cross_coef, vals_i) / h[i]
+            hess[i, j] = hess[j, i] = val / h[j]
+
+    return hess
+
+
 """
 Two-point interpolation
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -646,11 +828,14 @@ def Nbspl(t, x, k=3):
         raise Exception("Input error in Nbspl: require that k < len(t)-2")
     t = np.array(t)
     x = np.array(x)[:, np.newaxis]
+    _dt_tol = 1e-10 * (t[-1] - t[0]) if t[-1] != t[0] else 1e-14
     N = 1.0*((x > t[:-1]) & (x <= t[1:]))
     for k in range(1, kmax+1):
         dt = t[k:] - t[:-k]
         _dt = dt.copy()
-        _dt[dt != 0] = 1./dt[dt != 0]
+        _safe = np.abs(dt) >= _dt_tol
+        _dt[_safe] = 1.0 / dt[_safe]
+        _dt[~_safe] = 0.0
         N = N[:,:-1]*(x-t[:-k-1])*_dt[:-1] - N[:,1:]*(x-t[k+1:])*_dt[1:]
     return N
 
@@ -662,12 +847,15 @@ def Nbspld1(t, x, k=3):
         raise Exception("Input error in Nbspl: require that k < len(t)-2")
     t = np.array(t)
     x = np.array(x)[:, np.newaxis]
+    _dt_tol = 1e-10 * (t[-1] - t[0]) if t[-1] != t[0] else 1e-14
     N = 1.0*((x > t[:-1]) & (x <= t[1:]))
     dN = np.zeros_like(N)
     for k in range(1, kmax+1):
         dt = t[k:] - t[:-k]
         _dt = dt.copy()
-        _dt[dt != 0] = 1./dt[dt != 0]
+        _safe = np.abs(dt) >= _dt_tol
+        _dt[_safe] = 1.0 / dt[_safe]
+        _dt[~_safe] = 0.0
         dN = dN[:,:-1]*(x-t[:-k-1])*_dt[:-1] - dN[:,1:]*(x-t[k+1:])*_dt[1:]
         dN += N[:,:-1]*_dt[:-1] - N[:,1:]*_dt[1:]
         N = N[:,:-1]*(x-t[:-k-1])*_dt[:-1] - N[:,1:]*(x-t[k+1:])*_dt[1:]
@@ -681,16 +869,63 @@ def Nbspld2(t, x, k=3):
         raise Exception("Input error in Nbspl: require that k < len(t)-2")
     t = np.array(t)
     x = np.array(x)[:, np.newaxis]
+    _dt_tol = 1e-10 * (t[-1] - t[0]) if t[-1] != t[0] else 1e-14
     N = 1.0*((x > t[:-1]) & (x <= t[1:]))
     dN = np.zeros_like(N)
     d2N = np.zeros_like(N)
     for k in range(1, kmax+1):
         dt = t[k:] - t[:-k]
         _dt = dt.copy()
-        _dt[dt != 0] = 1./dt[dt != 0]
+        _safe = np.abs(dt) >= _dt_tol
+        _dt[_safe] = 1.0 / dt[_safe]
+        _dt[~_safe] = 0.0
         d2N = d2N[:,:-1]*(x-t[:-k-1])*_dt[:-1] - d2N[:,1:]*(x-t[k+1:])*_dt[1:] \
             + 2*dN[:,:-1]*_dt[:-1] - 2*dN[:,1:]*_dt[1:]
         dN = dN[:,:-1]*(x-t[:-k-1])*_dt[:-1] - dN[:,1:]*(x-t[k+1:])*_dt[1:] \
             + N[:,:-1]*_dt[:-1] - N[:,1:]*_dt[1:]
         N = N[:,:-1]*(x-t[:-k-1])*_dt[:-1] - N[:,1:]*(x-t[k+1:])*_dt[1:]
     return N, dN, d2N
+
+
+"""
+Monotone interpolation
+~~~~~~~~~~~~~~~~~~~~~~
+"""
+
+
+def monotone_cubic_interp(x, y, xi):
+    """
+    Evaluate a monotone-preserving cubic spline at points *xi*.
+
+    Uses SciPy's PCHIP (Piecewise Cubic Hermite Interpolating Polynomial),
+    which implements the Fritsch-Carlson algorithm.  Unlike natural or
+    clamped cubic splines, PCHIP guarantees no spurious oscillations between
+    data points — local extrema in the data are preserved but not introduced.
+
+    Parameters
+    ----------
+    x : array_like, shape (n,)
+        Strictly increasing sample points.
+    y : array_like, shape (n,) or (n, Ndim)
+        Function values at the sample points.  When 2-D, each column is
+        interpolated independently.
+    xi : array_like, shape (m,)
+        Points at which to evaluate the interpolant.
+
+    Returns
+    -------
+    yi : np.ndarray, shape (m,) or (m, Ndim)
+        Interpolated values at *xi*.  Outside ``[x[0], x[-1]]`` the
+        interpolant extrapolates linearly using the slope at the nearest
+        endpoint.
+
+    Notes
+    -----
+    This is a thin wrapper around :class:`scipy.interpolate.PchipInterpolator`
+    provided so that callers need not import SciPy directly and so that the
+    extrapolation convention is documented and enforced in one place.
+    """
+    from scipy.interpolate import PchipInterpolator
+    x = np.asarray(x)
+    y = np.asarray(y)
+    return PchipInterpolator(x, y, extrapolate=True)(xi)
