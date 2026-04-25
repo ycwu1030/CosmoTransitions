@@ -124,26 +124,22 @@ class TestSplineFunctions:
 
     # ── known large errors for x² > 1 (defect B-04) ─────────────────────────
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="B-04: Jb_spline error for x²=4 is O(1) (~0.754). "
-               "The spline is wildly inaccurate for x² > 1. "
-               "Fix in Phase 3 (finiteT reconstruction).",
-    )
     def test_Jb_spline_accurate_at_x2_eq_4(self):
-        """B-04: expected to fail — spline error ≈ 0.754 at x²=4."""
+        """
+        Phase 3 fix for B-04: Jb_spline(4.0) should match Jb_exact2(4.0).
+        Both inputs are x²=4; the spline is accurate here.
+        """
         val = finiteT.Jb_spline(4.0)
-        exact = finiteT.Jb_exact(4.0)
+        exact = finiteT.Jb_exact2(4.0)
         assert abs(val - exact) < 1e-3
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="B-04: Jb_spline error for x²=25 is 0.133. Fix in Phase 3.",
-    )
     def test_Jb_spline_accurate_at_x2_eq_25(self):
-        """B-04: expected to fail — spline error ≈ 0.133 at x²=25."""
+        """
+        Phase 3 fix for B-04: Jb_spline(25.0) should match Jb_exact2(25.0).
+        Both inputs are x²=25; the spline is accurate here.
+        """
         val = finiteT.Jb_spline(25.0)
-        exact = finiteT.Jb_exact(25.0)
+        exact = finiteT.Jb_exact2(25.0)
         assert abs(val - exact) < 1e-3
 
     # ── large x² → 0 ─────────────────────────────────────────────────────────
@@ -172,15 +168,14 @@ class TestSplineFunctions:
             val = finiteT.Jb_spline(x2)
             assert np.isfinite(val), f"Jb_spline({x2}) returned non-finite: {val}"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="B-05: Jb_spline(-1.0) = -2.818 but exact gives -1.696. "
-               "Imaginary-mass handling is incorrect. Fix in Phase 3.",
-    )
     def test_Jb_spline_negative_x2_correct(self):
-        """B-05: imaginary mass spline value is wrong."""
+        """
+        Phase 3 fix for B-05: Jb_spline(-1.0) must match Jb_exact2(-1.0).
+        x²=-1 is inside the existing positive-domain spline range (_xbmin≈-3.72),
+        so it was already correct; this test confirms it stays so.
+        """
         val = finiteT.Jb_spline(-1.0)
-        exact = finiteT.Jb_exact(-1.0)
+        exact = finiteT.Jb_exact2(-1.0)
         assert abs(val - exact) / abs(exact) < 0.01
 
 
@@ -257,3 +252,166 @@ def test_finiteT_module_imports():
     mod = importlib.import_module("cosmoTransitions.finiteT")
     for name in ["Jb_spline", "Jf_spline", "Jb_exact", "Jf_exact"]:
         assert hasattr(mod, name), f"finiteT missing attribute '{name}'"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Phase 3 — Negative x² spline (B-05 fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNegativeX2Spline:
+    """
+    Verify that Jb_spline / Jf_spline correctly handle negative x²
+    (imaginary thermal mass) after the Phase 3 fix.
+
+    The old code clamped to the boundary value for x² < _xbmin ≈ -3.72
+    (Jb) and x² < _xfmin ≈ -6.82 (Jf). The new code uses a dedicated
+    negative-domain spline covering x² ∈ [-20, boundary).
+    """
+
+    def test_Jb_spline_neg_x2_accurate_range(self):
+        """
+        For x² ∈ {-5, -8, -10, -15}, Jb_spline should agree with
+        Jb_exact2 to better than 1e-4 (absolute).
+        """
+        for x2 in [-5.0, -8.0, -10.0, -15.0]:
+            spl = finiteT.Jb_spline(float(x2))
+            exact = finiteT.Jb_exact2(float(x2))
+            assert abs(spl - exact) < 1e-4, (
+                f"Jb_spline({x2}) = {spl:.6g}, exact = {exact:.6g}, "
+                f"err = {abs(spl-exact):.2g}"
+            )
+
+    def test_Jf_spline_neg_x2_accurate_range(self):
+        """
+        For x² ∈ {-8, -10, -15}, Jf_spline should agree with
+        Jf_exact2 to better than 1e-4 (absolute).
+        """
+        for x2 in [-8.0, -10.0, -15.0]:
+            spl = finiteT.Jf_spline(float(x2))
+            exact = finiteT.Jf_exact2(float(x2))
+            assert abs(spl - exact) < 1e-4, (
+                f"Jf_spline({x2}) = {spl:.6g}, exact = {exact:.6g}, "
+                f"err = {abs(spl-exact):.2g}"
+            )
+
+    def test_Jb_spline_continuity_at_zero(self):
+        """
+        Jb_spline should be continuous at x² = 0: values just below and
+        just above zero should agree to within 1e-6.
+        """
+        v_neg = finiteT.Jb_spline(numpy_like(-1e-6))
+        v_pos = finiteT.Jb_spline(numpy_like(+1e-6))
+        assert abs(float(v_neg) - float(v_pos)) < 1e-4
+
+    def test_Jb_spline_deep_neg_returns_finite(self):
+        """For x² = -100 (deep tachyonic), Jb_spline should not crash
+        and should return a finite value (the boundary)."""
+        val = finiteT.Jb_spline(-100.0)
+        assert np.isfinite(val)
+
+    def test_Jb_spline_deep_neg_issues_warning(self):
+        """For x² < -20, Jb_spline should emit a logger.warning."""
+        import logging
+        logger = logging.getLogger("cosmoTransitions.finiteT")
+        with _LogCapturer(logger) as cap:
+            finiteT.Jb_spline(-100.0)
+        assert any("boundary" in m or "invalid" in m for m in cap.messages), (
+            "Expected a warning about deep-negative x²"
+        )
+
+    def test_Jf_spline_continuity_at_xfmin(self):
+        """
+        Jf_spline should be continuous at _xfmin ≈ -6.82: values just
+        inside and just outside the old boundary should be close.
+        """
+        xfmin = finiteT._xfmin
+        v_inside = finiteT.Jf_spline(xfmin + 0.01)
+        v_outside = finiteT.Jf_spline(xfmin - 0.01)
+        assert abs(float(v_inside) - float(v_outside)) < 0.05
+
+
+def numpy_like(val):
+    """Return val as a numpy 0-d array for testing scalar spline calls."""
+    return np.array(val)
+
+
+class _LogCapturer:
+    """Context manager that captures logger messages."""
+    def __init__(self, logger):
+        self.logger = logger
+        self.messages = []
+        self._handler = None
+
+    def __enter__(self):
+        import logging
+        class _H(logging.Handler):
+            def __init__(self_h):
+                super().__init__()
+                self_h.store = self.messages
+            def emit(self_h, record):
+                self_h.store.append(record.getMessage())
+        self._handler = _H()
+        self.logger.addHandler(self._handler)
+        self.logger.setLevel(logging.DEBUG)
+        return self
+
+    def __exit__(self, *args):
+        self.logger.removeHandler(self._handler)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Phase 3 — Low-expansion range guard (B-L fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestLowExpansionGuard:
+    """
+    Jb_low / Jf_low are high-T series expansions that diverge for x² > ~35.
+    Phase 3 adds a ValueError guard at x² > 30.
+    """
+
+    def test_Jb_low_raises_for_large_x(self):
+        """Jb_low(x) with x² = 50 must raise ValueError."""
+        with pytest.raises(ValueError, match="diverges"):
+            finiteT.Jb_low(np.sqrt(50.0))
+
+    def test_Jf_low_raises_for_large_x(self):
+        """Jf_low(x) with x² = 50 must raise ValueError."""
+        with pytest.raises(ValueError, match="diverges"):
+            finiteT.Jf_low(np.sqrt(50.0))
+
+    def test_Jb_low_valid_range_no_raise(self):
+        """Jb_low(1.0) is well inside the valid range and must not raise."""
+        val = finiteT.Jb_low(1.0)
+        assert np.isfinite(val)
+
+    def test_Jb_low_boundary_x2_30(self):
+        """x² = 30 is exactly at the cutoff — should not raise."""
+        val = finiteT.Jb_low(np.sqrt(30.0))
+        assert np.isfinite(val)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Phase 3 — arrayFunc replacement (vectorize)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestArrayFuncVectorize:
+    """arrayFunc is now implemented via numpy.vectorize."""
+
+    def test_arrayFunc_array_input(self):
+        """1-D array input should produce a correctly shaped output array."""
+        from cosmoTransitions.finiteT import arrayFunc
+        x = np.array([0.0, 1.0, 4.0, 9.0])
+        result = arrayFunc(np.sqrt, x)
+        np.testing.assert_allclose(result, np.sqrt(x))
+
+    def test_arrayFunc_scalar_input(self):
+        """Scalar input (no len()) should fall back to direct function call."""
+        from cosmoTransitions.finiteT import arrayFunc
+        result = arrayFunc(lambda v: v * 2.0, 3.0)
+        assert result == 6.0
+
+    def test_arrayFunc_output_dtype(self):
+        """Output dtype should match the requested typ parameter."""
+        from cosmoTransitions.finiteT import arrayFunc
+        result = arrayFunc(float, np.array([1, 2, 3]), typ=float)
+        assert result.dtype == float

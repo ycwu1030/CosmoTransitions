@@ -17,6 +17,7 @@ calculate the high and low x expansions of J to order n.
 Specify the derivative with the 'deriv' parameter.
 """
 
+import logging
 import os
 
 import numpy
@@ -33,6 +34,9 @@ log, exp, sqrt = numpy.log, numpy.exp, numpy.sqrt
 array = numpy.array
 
 spline_data_path = os.path.dirname(__file__)
+_logger = logging.getLogger(__name__)
+_xbneg_min = -20.0   # lower bound of the extended negative-domain Jb spline
+_xfneg_min = -20.0   # lower bound of the extended negative-domain Jf spline
 
 
 # The following are the exact integrals:
@@ -89,6 +93,32 @@ def _Jb_exact2(theta):
         )
 
 
+def _Jb_exact2_hiprec(theta):
+    """_Jb_exact2 with increased quad limit for better convergence at large |theta|."""
+    f = lambda y: y*y*log(1-exp(-sqrt(y*y+theta))).real
+    if theta >= 0:
+        return integrate.quad(f, 0, numpy.inf, limit=200)[0]
+    else:
+        f1 = lambda y: y*y*log(2*abs(numpy.sin(sqrt(-theta-y*y)/2)))
+        return (
+            integrate.quad(f, abs(theta)**.5, numpy.inf, limit=200)[0] +
+            integrate.quad(f1, 0, abs(theta)**.5, limit=200)[0]
+        )
+
+
+def _Jf_exact2_hiprec(theta):
+    """_Jf_exact2 with increased quad limit for better convergence at large |theta|."""
+    f = lambda y: -y*y*log(1+exp(-sqrt(y*y+theta))).real
+    if theta >= 0:
+        return integrate.quad(f, 0, numpy.inf, limit=200)[0]
+    else:
+        f1 = lambda y: -y*y*log(2*abs(numpy.cos(sqrt(-theta-y*y)/2)))
+        return (
+            integrate.quad(f, abs(theta)**.5, numpy.inf, limit=200)[0] +
+            integrate.quad(f1, 0, abs(theta)**.5, limit=200)[0]
+        )
+
+
 def _dJf_exact(x):
     f = lambda y: y*y*(exp(sqrt(y*y+x*x))+1)**-1*x/sqrt(y*y+x*x)
     return integrate.quad(f, 0, numpy.inf)[0]
@@ -100,21 +130,13 @@ def _dJb_exact(x):
 
 
 def arrayFunc(f, x, typ=float):
-    # This function allows a 1D array to be passed to something that
-    # normally can't handle it
-    i = 0
+    """Apply a scalar function element-wise over an array."""
     try:
-        n = len(x)
-    except:
+        len(x)
+    except TypeError:
         return f(x)  # x isn't an array
-    s = numpy.empty(n, typ)
-    while(i < n):
-        try:
-            s[i] = f(x[i])
-        except:
-            s[i] = numpy.NaN
-        i += 1
-    return s
+    vf = numpy.vectorize(lambda xi: f(xi), otypes=[typ])
+    return vf(x)
 
 
 def Jf_exact(x):
@@ -164,13 +186,38 @@ else:
 
 
 _tckf = interpolate.splrep(_xf, _yf)
-def Jf_spline(X,n=0):
+
+# Negative-domain Jf spline: covers x² ∈ [_xfneg_min, _xfmin]
+_Jf_neg_dat_path = spline_data_path + "/finiteT_f_neg.dat.txt"
+if os.path.exists(_Jf_neg_dat_path):
+    _xf_neg, _yf_neg = numpy.loadtxt(_Jf_neg_dat_path).T
+else:
+    _xf_neg = numpy.linspace(_xfneg_min, _xfmin, 200)
+    _yf_neg = arrayFunc(_Jf_exact2_hiprec, _xf_neg)
+    numpy.savetxt(_Jf_neg_dat_path, numpy.array([_xf_neg, _yf_neg]).T)
+
+_tckf_neg = interpolate.splrep(_xf_neg, _yf_neg)
+
+
+def Jf_spline(X, n=0):
     """Jf interpolated from a saved spline. Input is (m/T)^2."""
     X = numpy.array(X, copy=False)
     x = X.ravel()
-    y = interpolate.splev(x,_tckf, der=n).ravel()
-    y[x < _xfmin] = interpolate.splev(_xfmin,_tckf, der=n)
+    y = interpolate.splev(x, _tckf, der=n).ravel()
     y[x > _xfmax] = 0
+    # Extended negative domain: use dedicated negative-domain spline
+    neg_ok = (x < _xfmin) & (x >= _xfneg_min)
+    if neg_ok.any():
+        y[neg_ok] = interpolate.splev(x[neg_ok], _tckf_neg, der=n)
+    # Deep negative: outside spline domain — physically ill-defined
+    deep_neg = x < _xfneg_min
+    if deep_neg.any():
+        _logger.warning(
+            "Jf_spline: x\u00b2 = %.4g below %.4g; perturbation theory likely "
+            "invalid. Returning boundary value.",
+            float(x[deep_neg].min()), _xfneg_min
+        )
+        y[deep_neg] = interpolate.splev(_xfneg_min, _tckf_neg, der=n)
     return y.reshape(X.shape)
 
 
@@ -194,13 +241,38 @@ else:
 
 
 _tckb = interpolate.splrep(_xb, _yb)
-def Jb_spline(X,n=0):
+
+# Negative-domain Jb spline: covers x² ∈ [_xbneg_min, _xbmin]
+_Jb_neg_dat_path = spline_data_path + "/finiteT_b_neg.dat.txt"
+if os.path.exists(_Jb_neg_dat_path):
+    _xb_neg, _yb_neg = numpy.loadtxt(_Jb_neg_dat_path).T
+else:
+    _xb_neg = numpy.linspace(_xbneg_min, _xbmin, 200)
+    _yb_neg = arrayFunc(_Jb_exact2_hiprec, _xb_neg)
+    numpy.savetxt(_Jb_neg_dat_path, numpy.array([_xb_neg, _yb_neg]).T)
+
+_tckb_neg = interpolate.splrep(_xb_neg, _yb_neg)
+
+
+def Jb_spline(X, n=0):
     """Jb interpolated from a saved spline. Input is (m/T)^2."""
     X = numpy.array(X, copy=False)
     x = X.ravel()
-    y = interpolate.splev(x,_tckb, der=n).ravel()
-    y[x < _xbmin] = interpolate.splev(_xbmin,_tckb, der=n)
+    y = interpolate.splev(x, _tckb, der=n).ravel()
     y[x > _xbmax] = 0
+    # Extended negative domain: use dedicated negative-domain spline
+    neg_ok = (x < _xbmin) & (x >= _xbneg_min)
+    if neg_ok.any():
+        y[neg_ok] = interpolate.splev(x[neg_ok], _tckb_neg, der=n)
+    # Deep negative: outside spline domain — physically ill-defined
+    deep_neg = x < _xbneg_min
+    if deep_neg.any():
+        _logger.warning(
+            "Jb_spline: x\u00b2 = %.4g below %.4g; perturbation theory likely "
+            "invalid. Returning boundary value.",
+            float(x[deep_neg].min()), _xbneg_min
+        )
+        y[deep_neg] = interpolate.splev(_xbneg_min, _tckb_neg, der=n)
     return y.reshape(X.shape)
 
 
@@ -222,9 +294,19 @@ lowCoef_f = (a,b,d,logaf,l,g)
 del (a,b,d,logaf,l,g)  # clean up name space
 
 
-def Jb_low(x,n=20):
+_JB_LOW_X2_MAX = 30.0  # low expansion diverges for x² > ~35
+
+
+def Jb_low(x, n=20):
     """Jb calculated using the low-x (high-T) expansion."""
-    (a,b,c,d,logab,l,g) = lowCoef_b
+    x = numpy.asarray(x)
+    if numpy.any(x * x > _JB_LOW_X2_MAX):
+        raise ValueError(
+            "Jb_low: x\u00b2 = %.4g > %.4g; the high-T series diverges here. "
+            "Use Jb_spline or Jb(approx='spline') instead."
+            % (float(numpy.max(x * x)), _JB_LOW_X2_MAX)
+        )
+    (a, b, c, d, logab, l, g) = lowCoef_b
     y = a + x*x*(b + x*(c + d*x*(numpy.nan_to_num(log(x*x)) - logab)))
     i = 1
     while i <= n:
@@ -233,9 +315,19 @@ def Jb_low(x,n=20):
     return y
 
 
-def Jf_low(x,n=20):
+_JF_LOW_X2_MAX = 30.0  # low expansion diverges for x² > ~35
+
+
+def Jf_low(x, n=20):
     """Jf calculated using the low-x (high-T) expansion."""
-    (a,b,d,logaf,l,g) = lowCoef_f
+    x = numpy.asarray(x)
+    if numpy.any(x * x > _JF_LOW_X2_MAX):
+        raise ValueError(
+            "Jf_low: x\u00b2 = %.4g > %.4g; the high-T series diverges here. "
+            "Use Jf_spline or Jf(approx='spline') instead."
+            % (float(numpy.max(x * x)), _JF_LOW_X2_MAX)
+        )
+    (a, b, d, logaf, l, g) = lowCoef_f
     y = a + x*x*(b + d*x*x*(numpy.nan_to_num(log(x*x)) - logaf))
     i = 1
     while i <= n:
@@ -275,22 +367,48 @@ def d3x2K2(k,x):
     return numpy.nan_to_num(x*(y*k*special.kn(1,k*y) - 3*special.kn(0,k*y)))
 
 
+_JB_HIGH_UNDERFLOW_X = 700  # kn(2, k*x) underflows to 0 for x > this
+
+
 def Jb_high(x, deriv=0, n=8):
-    """Jb calculated using the high-x (low-T) expansion."""
+    """Jb calculated using the high-x (low-T) expansion.
+
+    For x > ~700, scipy.special.kn(2, k*x) underflows to 0, so the
+    function returns 0. This is numerically correct since the true
+    value is O(exp(-700)) ~ 10^{-304}.
+    """
+    if numpy.any(numpy.asarray(x) > _JB_HIGH_UNDERFLOW_X):
+        _logger.debug(
+            "Jb_high: x > %d, Bessel functions underflow; returning 0.",
+            _JB_HIGH_UNDERFLOW_X
+        )
     K = (x2K2, dx2K2, d2x2K2, d3x2K2)[deriv]
     y, k = 0.0, 1
     while k <= n:
-        y += K(k,x)
+        y += K(k, x)
         k += 1
     return y
 
 
+_JF_HIGH_UNDERFLOW_X = 700  # kn(2, k*x) underflows to 0 for x > this
+
+
 def Jf_high(x, deriv=0, n=8):
-    """Jf calculated using the high-x (low-T) expansion."""
+    """Jf calculated using the high-x (low-T) expansion.
+
+    For x > ~700, scipy.special.kn(2, k*x) underflows to 0, so the
+    function returns 0. This is numerically correct since the true
+    value is O(exp(-700)) ~ 10^{-304}.
+    """
+    if numpy.any(numpy.asarray(x) > _JF_HIGH_UNDERFLOW_X):
+        _logger.debug(
+            "Jf_high: x > %d, Bessel functions underflow; returning 0.",
+            _JF_HIGH_UNDERFLOW_X
+        )
     K = (x2K2, dx2K2, d2x2K2, d3x2K2)[deriv]
     y, k, i = 0.0, 1, 1
     while k <= n:
-        y += i*K(k,x)
+        y += i*K(k, x)
         i *= -1
         k += 1
     return y
