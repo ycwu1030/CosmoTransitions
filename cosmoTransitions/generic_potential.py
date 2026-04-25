@@ -18,6 +18,9 @@ from .finiteT import Jf_spline as Jf
 from . import transitionFinder
 from . import helper_functions
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class generic_potential():
     """
@@ -636,27 +639,25 @@ class generic_potential():
             raise RuntimeError("self.TnTrans has not been set. "
                 "Try running self.findAllTransitions() first.")
         if len(self.TnTrans) == 0:
-            print("No transitions for this potential.\n")
+            logger.info("No transitions for this potential.")
         for trans in self.TnTrans:
             trantype = trans['trantype']
             if trantype == 1:
                 trantype = 'First'
             elif trantype == 2:
                 trantype = 'Second'
-            print("%s-order transition at Tnuc = %0.4g" %
-                  (trantype, trans['Tnuc']))
-            print("High-T phase:\n  key = %s; vev = %s" %
-                  (trans['high_phase'], trans['high_vev']))
-            print("Low-T phase:\n  key = %s; vev = %s" %
-                  (trans['low_phase'], trans['low_vev']))
-            print("Pressure difference = %0.4g = (%0.4g)^4" %
-                  (trans['Delta_p'], trans['Delta_p']**.25))
-            print("Energy difference = %0.4g = (%0.4g)^4" %
-                  (trans['Delta_rho'], trans['Delta_rho']**.25))
-            print("Action = %0.4g" % trans['action'])
-            print("Action / Tnuc = %0.6g" % (trans['action']/trans['Tnuc']))
-            print("")
-
+            logger.info("%s-order transition at Tnuc = %0.4g",
+                        trantype, trans['Tnuc'])
+            logger.info("High-T phase:\n  key = %s; vev = %s",
+                        trans['high_phase'], trans['high_vev'])
+            logger.info("Low-T phase:\n  key = %s; vev = %s",
+                        trans['low_phase'], trans['low_vev'])
+            logger.info("Pressure difference = %0.4g = (%0.4g)^4",
+                        trans['Delta_p'], trans['Delta_p']**.25)
+            logger.info("Energy difference = %0.4g = (%0.4g)^4",
+                        trans['Delta_rho'], trans['Delta_rho']**.25)
+            logger.info("Action = %0.4g", trans['action'])
+            logger.info("Action / Tnuc = %0.6g", trans['action']/trans['Tnuc'])
     # PLOTTING ---------------------------------
 
     def plot2d(self, box, T=0, treelevel=False, offset=0,

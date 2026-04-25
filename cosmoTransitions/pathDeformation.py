@@ -33,10 +33,13 @@ import numpy as np
 from scipy import optimize, interpolate
 from collections import namedtuple
 
-from scipy.integrate import cumulative_trapezoid, odeint
+from scipy.integrate import cumulative_trapezoid, solve_ivp
 
 from . import tunneling1D
 from . import helper_functions
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 class DeformationError(Exception):
@@ -181,8 +184,7 @@ class Deformation_Spline:
 
     _step_rval = namedtuple("step_rval", "stepsize step_reversed fRatio")
     def step(self, lastStep, maxstep=.1, minstep=1e-4, reverseCheck=.15,
-             stepIncrease=1.5, stepDecrease=5., checkAfterFit=True,
-             verbose=False):
+             stepIncrease=1.5, stepDecrease=5., checkAfterFit=True):
         """
         Deform the path one step.
 
@@ -209,8 +211,6 @@ class Deformation_Spline:
         checkAfterFit : bool, optional
             If True, the convergence test is performed after the points are fit
             to a spline. If False, it's done beforehand.
-        verbose : bool, optional
-            If True, output is printed at each step.
 
         Returns
         -------
@@ -271,7 +271,7 @@ class Deformation_Spline:
                     step_reversed = True
                     phi = self._phi_prev
                     F = self._F_prev
-                    if verbose: print("step reversed")
+                    logger.debug("step reversed")
                     stepsize = lastStep/stepDecrease
             else:
                 """ No (large number of) indices reversed, just do a regular
@@ -302,16 +302,15 @@ class Deformation_Spline:
         Ffit = (phi-self._phi_prev)/stepsize
         fRatio2 = np.max(np.sqrt(np.sum(Ffit*Ffit,-1)))/self._L
 
-        if verbose:
-            print("step: %i; stepsize: %0.2e; fRatio1 %0.2e; fRatio2: %0.2e"
-                  % (self.num_steps, stepsize, fRatio1, fRatio2))
+        logger.debug("step: %i; stepsize: %0.2e; fRatio1 %0.2e; fRatio2: %0.2e",
+                     self.num_steps, stepsize, fRatio1, fRatio2)
 
         fRatio = fRatio2 if checkAfterFit else fRatio1
         return self._step_rval(stepsize, step_reversed, fRatio)
 
     def deformPath(self, startstep=2e-3,
                    fRatioConv=.02, converge_0=5., fRatioIncrease=5.,
-                   maxiter=500, verbose=False, callback=None, step_params={}):
+                   maxiter=500, callback=None, step_params={}):
         """
         Deform the path many individual steps, stopping either when the
         convergence criterium is reached, when the maximum number of iterations
@@ -333,8 +332,6 @@ class Deformation_Spline:
             raising an error.
         maxiter : int, optional
             Maximum number of steps to take (ignoring reversed steps).
-        verbose : bool, optional
-            If True, print the ending condition.
         callback : callable, optional
             Called after each step. Should accept an instance of this class as a
             parameter, and return False if deformation should stop.
@@ -361,9 +358,8 @@ class Deformation_Spline:
             minfRatio = min(minfRatio, fRatio)
             if fRatio < fRatioConv or (self.num_steps == 1
                                        and fRatio < converge_0*fRatioConv):
-                if verbose:
-                    print("Path deformation converged. " +
-                          "%i steps. fRatio = %0.5e" % (self.num_steps,fRatio))
+                logger.info("Path deformation converged. %i steps. fRatio = %0.5e",
+                            self.num_steps, fRatio)
                 deformation_converged = True
                 break
             if minfRatio == fRatio:
@@ -377,11 +373,10 @@ class Deformation_Spline:
                 self.F_list = self.F_list[:minfRatio_index]
                 err_msg = ("Deformation doesn't appear to be converging."
                            "Stopping at the point of best convergence.")
-                if verbose: print(err_msg)
+                logger.warning(err_msg)
                 raise DeformationError(err_msg)
             if self.num_steps >= maxiter:
-                if verbose:
-                    print("Maximum number of deformation iterations reached.")
+                logger.warning("Maximum number of deformation iterations reached.")
                 break
         return deformation_converged
 
@@ -530,7 +525,7 @@ class Deformation_Points:
 
     def deformPath(self, startstep=.1, minstep=1e-6, step_increase=1.5,
                    fRatioConv=.02, converge_0=5., fRatioIncrease=20.,
-                   maxiter=500, verbose=0, callback=None, step_params={}):
+                   maxiter=500, callback=None, step_params={}):
         """
         Deform the path many individual steps, stopping either when the
         convergence criterium is reached, when the maximum number of iterations
@@ -553,9 +548,6 @@ class Deformation_Points:
             raising an error.
         maxiter : int, optional
             Maximum number of steps to take (ignoring reversed steps).
-        verbose : int, optional
-            If ``verbose >= 1``, print the ending condition.
-            If ``verbose >= 2``, print `fRatio` and `stepsize` at each step.
         callback : callable, optional
             Called after each step. Should accept an instance of this class as a
             parameter, and return False if deformation should stop.
@@ -578,18 +570,16 @@ class Deformation_Points:
         while True:
             self.num_steps += 1
             stepsize, fRatio = self.step(stepsize, minstep, **step_params)
-            if verbose >= 2:
-                print("step: %i; stepsize: %0.2e; fRatio: %0.2e"
-                      % (self.num_steps, stepsize, fRatio))
+            logger.debug("step: %i; stepsize: %0.2e; fRatio: %0.2e",
+                         self.num_steps, stepsize, fRatio)
             stepsize *= step_increase
             if callback is not None and not callback(self):
                 break
             minfRatio = min(minfRatio, fRatio)
             if fRatio < fRatioConv or (self.num_steps == 1
                                        and fRatio < converge_0*fRatioConv):
-                if verbose >= 1:
-                    print("Path deformation converged." +
-                          "%i steps. fRatio = %0.5e" % (self.num_steps,fRatio))
+                logger.info("Path deformation converged.%i steps. fRatio = %0.5e",
+                            self.num_steps, fRatio)
                 deformation_converged = True
                 break
             if minfRatio == fRatio:
@@ -601,10 +591,10 @@ class Deformation_Points:
                 self.F_list = self.F_list[:minfRatio_index]
                 err_msg = ("Deformation doesn't appear to be converging."
                            "Stopping at the point of best convergence.")
-                if verbose >= 1: print(err_msg)
+                logger.warning(err_msg)
                 raise DeformationError(err_msg)
             if self.num_steps >= maxiter:
-                if verbose >= 1: print("Maximum number of iterations reached.")
+                logger.warning("Maximum number of iterations reached.")
                 break
         return deformation_converged
 
@@ -774,11 +764,13 @@ class SplinePath:
         self._path_tck = interpolate.splprep(pts.T, u=pdist, s=0, k=k)[0]
         # 4. Re-evaluate the distance to each point.
         if reeval_distances:
-            def dpdx(_, x):
-                dp = np.array(interpolate.splev(x, self._path_tck, der=1))
-                return np.sqrt(np.sum(dp*dp))
-            pdist = odeint(dpdx, 0., pdist,
-                                     rtol=0, atol=pdist[-1]*1e-8)[:,0]
+            def dpdx(t, y):
+                dp = np.array(interpolate.splev(t, self._path_tck, der=1))
+                return [np.sqrt(np.sum(dp*dp))]
+            sol = solve_ivp(dpdx, (pdist[0], pdist[-1]), [0.],
+                            t_eval=pdist, rtol=1e-10, atol=pdist[-1]*1e-8,
+                            method='RK45')
+            pdist = sol.y[0]
             self.L = pdist[-1]
             self._path_tck = interpolate.splprep(pts.T, u=pdist, s=0, k=k)[0]
         # Now make the potential spline.
@@ -830,7 +822,7 @@ class SplinePath:
 
 
 def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
-                  save_all_steps=False, verbose=False,
+                  save_all_steps=False,
                   callback=None, callback_data=None,
                   V_spline_samples=100,
                   tunneling_class=tunneling1D.SingleFieldInstanton,
@@ -863,8 +855,6 @@ def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
         Maximum number of allowed deformation / tunneling iterations.
     save_all_steps : bool, optional
         If True, additionally output every single deformation sub-step.
-    verbose : bool, optional
-        If True, print a message at the start of each step.
     callback : callable
         User supplied function that is evaluted just prior to deforming the
         path. Should return True if the path should be deformed, and False if
@@ -938,7 +928,7 @@ def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
     saved_steps = []
     deformation_init_params['save_all_steps'] = save_all_steps
     for num_iter in range(1, maxiter+1):
-        if verbose: print("Starting tunneling step %i" % num_iter)
+        logger.debug("Starting tunneling step %i", num_iter)
         # 1. Fit the spline to the path.
         path = SplinePath(pts, V, dV, V_spline_samples=V_spline_samples,
                           extend_to_minima=True)
@@ -962,7 +952,7 @@ def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
         try:
             converged = deform_obj.deformPath(**deformation_deform_params)
         except DeformationError as err:
-            print(err.args[0])
+            logger.error(err.args[0])
             converged = False
         pts = deform_obj.phi
         if save_all_steps: saved_steps.append(deform_obj.phi_list)
@@ -971,7 +961,7 @@ def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
         if (converged and deform_obj.num_steps < 2):
             break
     else:
-        if verbose: print("Reached maxiter in fullTunneling. No convergence.")
+        logger.warning("Reached maxiter in fullTunneling. No convergence.")
     # Calculate the ratio of max perpendicular force to max gradient.
     # Make sure that we go back a step and use the forces on the path, not the
     # most recently deformed path.

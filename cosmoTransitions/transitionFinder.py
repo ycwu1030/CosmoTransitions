@@ -22,7 +22,8 @@ from scipy import linalg, interpolate, optimize
 from . import pathDeformation
 from . import tunneling1D
 
-import sys
+import logging
+logger = logging.getLogger(__name__)
 
 
 _traceMinimum_rval = namedtuple("traceMinimum_rval", "X T dXdT overX overT")
@@ -97,7 +98,7 @@ def traceMinimum(f, d2f_dxdt, d2f_dx2, x0, t0, tstop, dtstart, deltaX_target,
     relative to this scale. `deltaX_target` is now not optional for the same
     reasoning.
     """
-    print("traceMinimum t0 = %0.6g" % t0)
+    logger.debug("traceMinimum t0 = %0.6g", t0)
     Ndim = len(x0)
     M0 = d2f_dx2(x0,t0)
     minratio *= min(abs(linalg.eigvalsh(M0)))/max(abs(linalg.eigvalsh(M0)))
@@ -132,8 +133,7 @@ def traceMinimum(f, d2f_dxdt, d2f_dx2, x0, t0, tstop, dtstart, deltaX_target,
     X,T,dXdT = [x],[t],[dxdt]
     overX = overT = None
     while dxdt is not None:
-        sys.stdout.write('.')
-        sys.stdout.flush()
+        logger.debug("traceMinimum step")
         # Get the values at the next step
         tnext = t+dt
         xnext = fmin(x+dxdt*dt, tnext)
@@ -181,8 +181,6 @@ def traceMinimum(f, d2f_dxdt, d2f_dx2, x0, t0, tstop, dtstart, deltaX_target,
             dt = np.sign(dt)*dtmax
     if overT is None:
         overX, overT = X[-1], T[-1]
-    sys.stdout.write('\n')
-    sys.stdout.flush()
     X = np.array(X)
     T = np.array(T)
     dXdT = np.array(dXdT)
@@ -636,7 +634,7 @@ def getStartPhase(phases, V=None):
 
 def _tunnelFromPhaseAtT(T, phases, start_phase, V, dV,
                         phitol, overlapAngle, nuclCriterion,
-                        fullTunneling_params, verbose, outdict):
+                        fullTunneling_params, outdict):
     """
     Find the lowest action tunneling solution.
 
@@ -714,7 +712,7 @@ def _tunnelFromPhaseAtT(T, phases, start_phase, V, dV,
                 tdict['trantype'] = 0
                 tdict['action'] = np.inf
             else:
-                print("Unexpected error message.")
+                logger.error("Unexpected error message.")
                 raise
         if tdict['action'] <= lowest_action:
             lowest_action = tdict['action']
@@ -767,7 +765,6 @@ def _maxTCritForPhase(phases, start_phase, V, Ttol):
 def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
                     Ttol=1e-3, maxiter=100, phitol=1e-8, overlapAngle=45.0,
                     nuclCriterion=lambda S,T: S/(T+1e-100) - 140.0,
-                    verbose=True,
                     fullTunneling_params={}):
     """
     Find the instanton and nucleation temeprature for tunneling from
@@ -796,8 +793,6 @@ def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
         Function of the action *S* and temperature *T*. Should return 0 for the
         correct nucleation rate, > 0 for a low rate and < 0 for a high rate.
         Defaults to ``S/T - 140``.
-    verbose : bool
-        If true, print a message before each attempted tunneling.
     fullTunneling_params : dict
         Parameters to pass to :func:`pathDeformation.fullTunneling`.
 
@@ -821,7 +816,7 @@ def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
     outdict = {}  # keys are T values
     args = (phases, start_phase, V, dV,
             phitol, overlapAngle, nuclCriterion,
-            fullTunneling_params, verbose, outdict)
+            fullTunneling_params, outdict)
     Tmin = start_phase.T[0]
     T_highest_other = Tmin
     for phase in phases.values():
@@ -874,7 +869,7 @@ def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
         low_phase_dic = {low_phase_key:phases[low_phase_key]}
         args = (low_phase_dic, start_phase, V, dV,
                 phitol, overlapAngle, lambda S,T: S/(T+1e-100),
-                fullTunneling_params, verbose, outdict_tmp)
+                fullTunneling_params, outdict_tmp)
         # try:
         def for_derivative(T):
             try:
@@ -928,10 +923,10 @@ def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
         df, ok = _numeric_derivative(for_derivative, Tnuc)
         if ok and np.isfinite(df):
             rdict['betaHn_GW'] = float(Tnuc) * float(df)
-            print("Computed betaHn_GW =", df, "->", rdict['betaHn_GW'], "at Tnuc =", Tnuc)
+            logger.debug("Computed betaHn_GW = %g -> %g at Tnuc = %g", df, rdict['betaHn_GW'], Tnuc)
         else:
             rdict['betaHn_GW'] = 0.0
-            print("Could not compute betaHn_GW at Tnuc =", Tnuc, "; defaulting to 0.0")
+            logger.warning("Could not compute betaHn_GW at Tnuc = %g; defaulting to 0.0", Tnuc)
         # except Exception as e:
             # print("Could not compute betaHn_GW due to exception:", e)
             # rdict['betaHn_GW'] = 0.0
