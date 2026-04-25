@@ -16,6 +16,7 @@ implemented*).
 import numpy as np
 from scipy import optimize, special, interpolate
 from collections import namedtuple
+from collections.abc import Callable
 
 try:
     from scipy.integrate import simpson
@@ -117,9 +118,18 @@ class SingleFieldInstanton:
         plt.ylabel(r"Field $\phi$")
         plt.show()
     """
-    def __init__(self, phi_absMin, phi_metaMin, V,
-                 dV=None, d2V=None, phi_eps=1e-4, alpha=2,
-                 phi_bar=None, rscale=None):
+    def __init__(
+            self,
+            phi_absMin: float,
+            phi_metaMin: float,
+            V: Callable[[float], float],
+            dV: Callable[[float], float] | None = None,
+            d2V: Callable[[float], float] | None = None,
+            phi_eps: float = 1e-4,
+            alpha: int = 2,
+            phi_bar: float | None = None,
+            rscale: float | None = None,
+    ) -> None:
         self.phi_absMin, self.phi_metaMin = phi_absMin, phi_metaMin
         self.V = V
         if V(phi_metaMin) <= V(phi_absMin):
@@ -604,9 +614,17 @@ class SingleFieldInstanton:
         rval = (R,)+tuple(Yout.T)+eqn_args+(Rerr,)
         return self.profile_rval(*rval)
 
-    def findProfile(self, xguess=None, xtol=1e-6, phitol=1e-6,
-                    thinCutoff=.01, npoints=500, rmin=1e-4, rmax=1e4,
-                    max_interior_pts=None):
+    def findProfile(
+            self,
+            xguess: float | None = None,
+            xtol: float = 1e-6,
+            phitol: float = 1e-6,
+            thinCutoff: float = .01,
+            npoints: int = 500,
+            rmin: float = 1e-4,
+            rmax: float = 1e4,
+            max_interior_pts: int | None = None,
+    ) -> profile_rval:
         R"""
         Calculate the bubble profile by iteratively over/undershooting.
 
@@ -752,7 +770,7 @@ class SingleFieldInstanton:
             profile = self.profile_rval(R,Phi,dPhi, profile.Rerr)
         return profile
 
-    def findAction(self, profile):
+    def findAction(self, profile: profile_rval) -> float:
         R"""
         Calculate the Euclidean action for the instanton:
 

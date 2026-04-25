@@ -32,6 +32,8 @@ For more explicit details, see the original paper
 import numpy as np
 from scipy import optimize, interpolate
 from collections import namedtuple
+from collections.abc import Callable
+from typing import Any
 
 from scipy.integrate import cumulative_trapezoid, solve_ivp
 
@@ -45,6 +47,11 @@ logger = logging.getLogger(__name__)
 class DeformationError(Exception):
     """Raised when path deformation fails."""
     pass
+
+
+fullTunneling_rval = namedtuple(
+    "fullTunneling_rval", "profile1D Phi action fRatio saved_steps"
+)
 
 
 class Deformation_Spline:
@@ -821,16 +828,23 @@ class SplinePath:
         return np.array(pts).T
 
 
-def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
-                  save_all_steps=False,
-                  callback=None, callback_data=None,
-                  V_spline_samples=100,
-                  tunneling_class=tunneling1D.SingleFieldInstanton,
-                  tunneling_init_params={},
-                  tunneling_findProfile_params={},
-                  deformation_class=Deformation_Spline,
-                  deformation_init_params={},
-                  deformation_deform_params={}):
+def fullTunneling(
+        path_pts: np.ndarray | list,
+        V: Callable[[np.ndarray], np.ndarray],
+        dV: Callable[[np.ndarray], np.ndarray],
+        maxiter: int = 20,
+        fixEndCutoff: float = .03,
+        save_all_steps: bool = False,
+        callback: Callable | None = None,
+        callback_data: Any = None,
+        V_spline_samples: int | None = 100,
+        tunneling_class: type = tunneling1D.SingleFieldInstanton,
+        tunneling_init_params: dict = {},
+        tunneling_findProfile_params: dict = {},
+        deformation_class: type = Deformation_Spline,
+        deformation_init_params: dict = {},
+        deformation_deform_params: dict = {},
+) -> fullTunneling_rval:
     """
     Calculate the instanton solution in multiple field dimension.
 
@@ -971,8 +985,6 @@ def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
     dV_max = np.max(np.sqrt(np.sum(dV*dV,-1)))
     fRatio = F_max / dV_max
     # Assemble the output
-    rtuple = namedtuple("fullTunneling_rval",
-                        "profile1D Phi action fRatio saved_steps")
     Phi = path.pts(profile1D.Phi)
     action = tobj.findAction(profile1D)
-    return rtuple(profile1D, Phi, action, fRatio, saved_steps)
+    return fullTunneling_rval(profile1D, Phi, action, fRatio, saved_steps)

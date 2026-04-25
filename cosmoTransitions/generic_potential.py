@@ -94,6 +94,8 @@ class generic_potential():
         If None, the total number of degrees of freedom will be taken
         directly from :meth:`fermion_massSq`.
     """
+    Ndim: int
+
     def __init__(self, *args, **dargs):
         self.Ndim = 0
         self.x_eps = .001
@@ -124,7 +126,7 @@ class generic_potential():
 
     # EFFECTIVE POTENTIAL CALCULATIONS -----------------------
 
-    def V0(self, X):
+    def V0(self, X: np.ndarray) -> np.ndarray:
         """
         The tree-level potential. Should be overridden by subclasses.
 
@@ -137,7 +139,7 @@ class generic_potential():
         """
         return X[...,0]*0
 
-    def boson_massSq(self, X, T):
+    def boson_massSq(self, X: np.ndarray, T: float) -> tuple:
         """
         Calculate the boson particle spectrum. Should be overridden by
         subclasses.
@@ -304,7 +306,7 @@ class generic_potential():
         y = self.V1T(bosons, fermions, T, include_radiation)
         return y
 
-    def Vtot(self, X, T, include_radiation=True):
+    def Vtot(self, X: np.ndarray, T: float, include_radiation: bool = True) -> np.ndarray:
         """
         The total finite temperature effective potential.
 
@@ -339,7 +341,7 @@ class generic_potential():
         X0 = np.zeros(self.Ndim)
         return self.Vtot(X,T,False) - self.Vtot(X0,T,False)
 
-    def gradV(self, X, T):
+    def gradV(self, X: np.ndarray, T: float) -> np.ndarray:
         """
         Find the gradient of the full effective potential.
 
@@ -525,7 +527,7 @@ class generic_potential():
         """
         return False
 
-    def getPhases(self,tracingArgs={}):
+    def getPhases(self, tracingArgs: dict = {}) -> dict:
         """
         Find different phases as functions of temperature
 
@@ -558,7 +560,7 @@ class generic_potential():
             self.Vtot, phases, self.x_eps*1e-2, self.x_eps*10)
         return self.phases
 
-    def calcTcTrans(self, startHigh=False):
+    def calcTcTrans(self, startHigh: bool = False) -> list[dict]:
         """
         Runs :func:`transitionFinder.findCriticalTemperatures`, storing the
         result in `self.TcTrans`.
@@ -586,7 +588,7 @@ class generic_potential():
                 - self.energyDensity(xlow,T,False)
         return self.TcTrans
 
-    def findAllTransitions(self, tunnelFromPhase_args={}):
+    def findAllTransitions(self, tunnelFromPhase_args: dict = {}) -> list[dict]:
         """
         Find all phase transitions up to `self.Tmax`, storing the transitions
         in `self.TnTrans`.

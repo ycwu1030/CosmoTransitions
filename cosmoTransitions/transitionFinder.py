@@ -14,6 +14,7 @@ properties of the phase transitions.
 
 
 from collections import namedtuple
+from collections.abc import Callable
 
 import numpy as np
 from scipy import linalg, interpolate, optimize
@@ -27,9 +28,21 @@ logger = logging.getLogger(__name__)
 
 
 _traceMinimum_rval = namedtuple("traceMinimum_rval", "X T dXdT overX overT")
-def traceMinimum(f, d2f_dxdt, d2f_dx2, x0, t0, tstop, dtstart, deltaX_target,
-                 dtabsMax=20.0, dtfracMax=.25, dtmin=1e-3,
-                 deltaX_tol=1.2, minratio=1e-2):
+def traceMinimum(
+        f: Callable[[np.ndarray, float], float],
+        d2f_dxdt: Callable[[np.ndarray, float], np.ndarray],
+        d2f_dx2: Callable[[np.ndarray, float], np.ndarray],
+        x0: np.ndarray,
+        t0: float,
+        tstop: float,
+        dtstart: float,
+        deltaX_target: float,
+        dtabsMax: float = 20.0,
+        dtfracMax: float = .25,
+        dtmin: float = 1e-3,
+        deltaX_tol: float = 1.2,
+        minratio: float = 1e-2,
+) -> _traceMinimum_rval:
     """
     Trace the minimum `xmin(t)` of the function `f(x,t)`, starting at `x0, t0`.
 
@@ -275,10 +288,20 @@ class Phase:
         return s
 
 
-def traceMultiMin(f, d2f_dxdt, d2f_dx2,
-                  points, tLow, tHigh, deltaX_target,
-                  dtstart=1e-3, tjump=1e-3, forbidCrit=None,
-                  single_trace_args={}, local_min_args={}):
+def traceMultiMin(
+        f: Callable[[np.ndarray, float], float],
+        d2f_dxdt: Callable[[np.ndarray, float], np.ndarray],
+        d2f_dx2: Callable[[np.ndarray, float], np.ndarray],
+        points: list,
+        tLow: float,
+        tHigh: float,
+        deltaX_target: float,
+        dtstart: float = 1e-3,
+        tjump: float = 1e-3,
+        forbidCrit: Callable[[np.ndarray], bool] | None = None,
+        single_trace_args: dict = {},
+        local_min_args: dict = {},
+) -> dict[int, "Phase"]:
     """
     Trace multiple minima `xmin(t)` of the function `f(x,t)`.
 
@@ -762,10 +785,19 @@ def _maxTCritForPhase(phases, start_phase, V, Ttol):
         xtol=Ttol, maxiter=200, disp=False)
 
 
-def tunnelFromPhase(phases, start_phase, V, dV, Tmax,
-                    Ttol=1e-3, maxiter=100, phitol=1e-8, overlapAngle=45.0,
-                    nuclCriterion=lambda S,T: S/(T+1e-100) - 140.0,
-                    fullTunneling_params={}):
+def tunnelFromPhase(
+        phases: "dict[int, Phase]",
+        start_phase: "Phase",
+        V: Callable[[np.ndarray, float], float],
+        dV: Callable[[np.ndarray, float], np.ndarray],
+        Tmax: float,
+        Ttol: float = 1e-3,
+        maxiter: int = 100,
+        phitol: float = 1e-8,
+        overlapAngle: float = 45.0,
+        nuclCriterion: Callable[[float, float], float] = lambda S, T: S / (T + 1e-100) - 140.0,
+        fullTunneling_params: dict = {},
+) -> "dict | None":
     """
     Find the instanton and nucleation temeprature for tunneling from
     `start_phase`.
@@ -949,7 +981,12 @@ def secondOrderTrans(high_phase, low_phase, Tstr='Tnuc'):
     return rdict
 
 
-def findAllTransitions(phases, V, dV, tunnelFromPhase_args={}):
+def findAllTransitions(
+        phases: "dict[int, Phase]",
+        V: Callable[[np.ndarray, float], float],
+        dV: Callable[[np.ndarray, float], np.ndarray],
+        tunnelFromPhase_args: dict = {},
+) -> list[dict]:
     """
     Find the complete phase transition history for the potential `V`.
 
@@ -1007,7 +1044,11 @@ def findAllTransitions(phases, V, dV, tunnelFromPhase_args={}):
     return transitions
 
 
-def findCriticalTemperatures(phases, V, start_high=False):
+def findCriticalTemperatures(
+        phases: "dict[int, Phase]",
+        V: Callable[[np.ndarray, float], float],
+        start_high: bool = False,
+) -> list[dict]:
     """
     Find all temperatures `Tcrit` such that there is degeneracy between any
     two phases.
