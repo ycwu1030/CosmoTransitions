@@ -13,10 +13,6 @@ implemented*).
     Create and document a *CDL_Instanton* class for tunneling with gravity.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import numpy as np
 from scipy import optimize, special, interpolate
 from collections import namedtuple
@@ -30,10 +26,6 @@ except ImportError:
 from . import helper_functions
 from .helper_functions import rkqs, IntegrationError, clampVal
 from .helper_functions import cubicInterpFunction
-
-import sys
-if sys.version_info >= (3,0):
-    xrange = range
 
 
 class PotentialError(Exception):
@@ -343,7 +335,7 @@ class SingleFieldInstanton:
             s = +1 if d2V > 0 else -1
             phi = 0.0
             dphi = 0.0
-            for k in xrange(1,4):
+            for k in range(1,4):
                 _ = (0.5*beta_r)**(2*k-2) * s**k / (gamma(k+1)*gamma(k+1+nu))
                 phi += _
                 dphi += _ * (2*k)
@@ -751,7 +743,7 @@ class SingleFieldInstanton:
             dPhi_int[0] = 0.0
             dV = self.dV_from_absMin(delta_phi0)
             d2V = self.d2V(Phi_int[0])
-            for i in xrange(1,len(R_int)):
+            for i in range(1,len(R_int)):
                 Phi_int[i], dPhi_int[i] = self.exactSolution(
                     R_int[i], Phi_int[0], dV, d2V)
             R = np.append(R_int, profile.R)

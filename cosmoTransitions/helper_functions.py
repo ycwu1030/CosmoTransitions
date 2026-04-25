@@ -2,16 +2,8 @@
 A collection of (mostly) stand alone helper functions.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from collections import namedtuple
 import numpy as np
-
-import sys
-if sys.version_info >= (3,0):
-    xrange = range
 
 
 """
@@ -65,7 +57,7 @@ def monotonicIndices(x):
     else:
         is_reversed = False
     I = [0]
-    for i in xrange(1, len(x)-1):
+    for i in range(1, len(x)-1):
         if x[i] > x[I[-1]] and x[i] < x[-1]:
             I.append(i)
     I.append(len(x)-1)
@@ -327,7 +319,7 @@ def deriv1n(y,x,n):
 
     d = np.empty((n,n,nx), dtype=x.dtype)*1.0
     d[0] = x[i[1:]] - x[i[0]]
-    for j in xrange(1,n):
+    for j in range(1,n):
         d[j] = np.roll(d[j-1], -1, axis=0)
     d[:,0] *= -1
     w = np.zeros((n+1,nx), dtype=y.dtype)*1.
@@ -498,10 +490,10 @@ class hessianFunction:
         eps = np.ones(Ndim) * eps
         dx = []
         coef = []
-        for i in xrange(Ndim):
+        for i in range(Ndim):
             dx.append([])
             coef.append([])
-            for j in xrange(i):
+            for j in range(i):
                 dx_ = np.zeros((order, order, Ndim))
                 if (order == 2):
                     dx_[:,:,i] = np.array([-1,1]) * eps[i]
@@ -544,8 +536,8 @@ class hessianFunction:
         x = np.asanyarray(x)
         y = np.empty(x.shape + (Ndim,))
         x = x[...,np.newaxis,:]
-        for i in xrange(Ndim):
-            for j in xrange(i):
+        for i in range(Ndim):
+            for j in range(i):
                 y_ = np.sum(f(x+dx[i][j], *args, **kwargs)
                             * coef[i][j], axis=-1)
                 y[...,i,j] = y[...,j,i] = y_
@@ -654,7 +646,7 @@ def Nbspl(t, x, k=3):
     t = np.array(t)
     x = np.array(x)[:, np.newaxis]
     N = 1.0*((x > t[:-1]) & (x <= t[1:]))
-    for k in xrange(1, kmax+1):
+    for k in range(1, kmax+1):
         dt = t[k:] - t[:-k]
         _dt = dt.copy()
         _dt[dt != 0] = 1./dt[dt != 0]
@@ -671,7 +663,7 @@ def Nbspld1(t, x, k=3):
     x = np.array(x)[:, np.newaxis]
     N = 1.0*((x > t[:-1]) & (x <= t[1:]))
     dN = np.zeros_like(N)
-    for k in xrange(1, kmax+1):
+    for k in range(1, kmax+1):
         dt = t[k:] - t[:-k]
         _dt = dt.copy()
         _dt[dt != 0] = 1./dt[dt != 0]
@@ -691,7 +683,7 @@ def Nbspld2(t, x, k=3):
     N = 1.0*((x > t[:-1]) & (x <= t[1:]))
     dN = np.zeros_like(N)
     d2N = np.zeros_like(N)
-    for k in xrange(1, kmax+1):
+    for k in range(1, kmax+1):
         dt = t[k:] - t[:-k]
         _dt = dt.copy()
         _dt[dt != 0] = 1./dt[dt != 0]

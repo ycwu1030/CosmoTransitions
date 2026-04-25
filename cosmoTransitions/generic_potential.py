@@ -10,10 +10,6 @@ simplified interface to the :mod:`.transitionFinder` module, and providing
 several methods for plotting the potential and its phases.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import numpy as np
 from scipy import optimize
 
@@ -21,10 +17,6 @@ from .finiteT import Jb_spline as Jb
 from .finiteT import Jf_spline as Jf
 from . import transitionFinder
 from . import helper_functions
-
-import sys
-if sys.version_info >= (3,0):
-    xrange = range
 
 
 class generic_potential():
@@ -798,7 +790,7 @@ def _linkTransitions(models, critTrans=True):
         allTrans.append(model.TcTrans if critTrans else model.TnTrans)
     # allTrans is now a list of lists of transitions.
     # We want to rearrange each sublist so that it matches the previous sublist.
-    for j in xrange(len(allTrans)-1):
+    for j in range(len(allTrans)-1):
         trans1, trans2 = allTrans[j], allTrans[j+1]
         if trans1 is None: trans1 = []
         if trans2 is None: trans2 = []
@@ -807,10 +799,10 @@ def _linkTransitions(models, critTrans=True):
             if t is not None:
                 t['link'] = None
                 t['diff'] = np.inf
-        for i1 in xrange(len(trans1)):
+        for i1 in range(len(trans1)):
             t1 = trans1[i1]  # t1 and t2 are individual transition dictionaries
             if t1 is None: continue
-            for i2 in xrange(len(trans2)):
+            for i2 in range(len(trans2)):
                 t2 = trans2[i2]
                 if t2 is None: continue
                 # See if t1 and t2 are each other's closest match
@@ -819,7 +811,7 @@ def _linkTransitions(models, critTrans=True):
                 if diff < t1['diff'] and diff < t2['diff']:
                     t1['diff'] = t2['diff'] = diff
                     t1['link'], t2['link'] = i2, i1
-        for i2 in xrange(len(trans2)):
+        for i2 in range(len(trans2)):
             t2 = trans2[i2]
             if (t2 is not None and t2['link'] is not None and
                     trans1[t2['link']]['link'] != i2):
@@ -849,8 +841,8 @@ def _linkTransitions(models, critTrans=True):
             trans.append(None)
     # Finally, transpose allTrans:
     allTrans2 = []
-    for i in xrange(len(allTrans[0])):
+    for i in range(len(allTrans[0])):
         allTrans2.append([])
-        for j in xrange(len(allTrans)):
+        for j in range(len(allTrans)):
             allTrans2[-1].append(allTrans[j][i])
     return allTrans2

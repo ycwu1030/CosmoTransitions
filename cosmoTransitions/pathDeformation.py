@@ -29,27 +29,14 @@ For more explicit details, see the original paper
 .. _`arXiv:1109.4189`: http://arxiv.org/abs/1109.4189
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import numpy as np
 from scipy import optimize, interpolate
 from collections import namedtuple
 
-try:
-    from scipy.integrate import cumulative_trapezoid, odeint
-except ImportError:
-    # scipy.version < 1.6
-    from scipy.integrate import cumtrapz as cumulative_trapezoid
-    from scipy.integrate import odeint
+from scipy.integrate import cumulative_trapezoid, odeint
 
 from . import tunneling1D
 from . import helper_functions
-
-import sys
-if sys.version_info >= (3,0):
-    xrange = range
 
 
 class DeformationError(Exception):
@@ -950,7 +937,7 @@ def fullTunneling(path_pts, V, dV, maxiter=20, fixEndCutoff=.03,
     pts = np.asanyarray(path_pts)
     saved_steps = []
     deformation_init_params['save_all_steps'] = save_all_steps
-    for num_iter in xrange(1, maxiter+1):
+    for num_iter in range(1, maxiter+1):
         if verbose: print("Starting tunneling step %i" % num_iter)
         # 1. Fit the spline to the path.
         path = SplinePath(pts, V, dV, V_spline_samples=V_spline_samples,

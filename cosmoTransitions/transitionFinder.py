@@ -13,10 +13,6 @@ properties of the phase transitions.
 """
 
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from collections import namedtuple
 
 import numpy as np
@@ -27,8 +23,6 @@ from . import pathDeformation
 from . import tunneling1D
 
 import sys
-if sys.version_info >= (3,0):
-    xrange = range
 
 
 _traceMinimum_rval = namedtuple("traceMinimum_rval", "X T dXdT overX overT")
@@ -681,8 +675,8 @@ def _tunnelFromPhaseAtT(T, phases, start_phase, V, dV,
     if overlapAngle > 0:
         excluded = []
         cos_overlap = np.cos(overlapAngle * np.pi/180)
-        for i in xrange(1, len(tunnel_list)):
-            for j in xrange(i):
+        for i in range(1, len(tunnel_list)):
+            for j in range(i):
                 xi = tunnel_list[i]['low_vev']
                 xj = tunnel_list[j]['low_vev']
                 xi2 = np.sum((xi-x0)**2)

@@ -1,13 +1,5 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import matplotlib.pyplot as plt
 import numpy as np
-
-import sys
-if sys.version_info >= (3,0):
-    xrange = range
 
 
 class MultiFieldPlotter:
@@ -100,7 +92,7 @@ class MultiFieldPlotter:
 
         Ndim = len(self.bounds)
         X = np.empty([nx]*Ndim + [Ndim])
-        for i in xrange(Ndim):
+        for i in range(Ndim):
             xmin, xmax = self.bounds[i]
             Y = X.swapaxes(i, -2)
             Y[...,i] = np.linspace(xmin,xmax,nx)
@@ -122,8 +114,8 @@ class MultiFieldPlotter:
         """
         Ndim = len(self.bounds)
         if subplot == 'all':
-            for i in xrange(Ndim):
-                for j in xrange(Ndim):
+            for i in range(Ndim):
+                for j in range(Ndim):
                     self.drawSubplot((i,j))
             return
         if not self.plot_1d and subplot[0] == subplot[1]:
