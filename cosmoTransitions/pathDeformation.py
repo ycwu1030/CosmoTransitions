@@ -130,6 +130,8 @@ class Deformation_Spline:
         t0 = np.append(np.append([0.]*(kb-1), np.linspace(0,1,nb+3-kb)),
                        [1.]*(kb-1))
         self._X,self._dX,self._d2X = helper_functions.Nbspld2(t0, self._t, kb)
+        self._nb = nb   # stored for _rebuild_spline_basis / _resample_path
+        self._kb = kb
         self._t = self._t[:,np.newaxis]  # Shape (n, 1)
         # subtract off the linear component.
         phi0, phi1 = phi[:1], phi[-1:]  # These are shape (1,N)
@@ -152,6 +154,113 @@ class Deformation_Spline:
         v2min *= np.max(np.sum(dV(self.phi)**2, -1)**.5*self._L/nb)
         v2[v2 < v2min] = v2min
         self.v2 = v2[:,np.newaxis]
+
+        # Estimate the barrier height by integrating |dV · dphi| along the path.
+        # Used in step() to clamp the force-normalisation denominator away from 0
+        # (prevents explosion when dV_max → 0 near a flat-bottomed vacuum).
+        phi_mid = 0.5 * (self.phi[1:] + self.phi[:-1])    # (n-1, N)
+        dphi_seg = self.phi[1:] - self.phi[:-1]            # (n-1, N)
+        dV_mid = dV(phi_mid)                               # (n-1, N)
+        self._delta_V = float(np.abs(np.sum(dV_mid * dphi_seg)))
+        if self._delta_V < 1e-30:
+            self._delta_V = 1e-30
+
+    def _rebuild_spline_basis(self, phi, v2, nb):
+        """Recompute the B-spline basis in-place from *phi* and *v2*.
+
+        Updates ``self.phi``, ``self.v2``, ``self._t``, ``self._X``,
+        ``self._dX``, ``self._d2X``, ``self._beta``, ``self._L``, and
+        ``self._nb``.  Also resets the previous-step cache
+        (``_phi_prev``, ``_F_prev``) because the path geometry has changed.
+        """
+        phi = np.asanyarray(phi)
+        dphi = phi[1:] - phi[:-1]
+        dL = np.sqrt(np.sum(dphi * dphi, axis=-1))
+        y = np.cumsum(dL)
+        self._L = y[-1]
+        t = np.append(0, y) / self._L
+        t[0] = 1e-100
+        t0 = np.append(
+            np.append([0.] * (self._kb - 1),
+                       np.linspace(0, 1, nb + 3 - self._kb)),
+            [1.] * (self._kb - 1))
+        X, dX, d2X = helper_functions.Nbspld2(t0, t, self._kb)
+        t = t[:, np.newaxis]
+        phi_lin = phi[:1] + (phi[-1:] - phi[:1]) * t
+        beta, *_ = np.linalg.lstsq(X, phi - phi_lin, rcond=-1)
+        self._t = t
+        self._X, self._dX, self._d2X = X, dX, d2X
+        self._beta = beta
+        self.phi = phi
+        self.v2 = v2
+        self._nb = nb
+        self._phi_prev = self._F_prev = None   # old direction is stale
+
+    def _resample_path(self, curvature_threshold=2.0, max_nb_scale=3):
+        """Insert mid-points in high-curvature path segments.
+
+        Parameters
+        ----------
+        curvature_threshold : float
+            A point interval is densified when its curvature
+            ``κ > curvature_threshold / L``.  Default 2.0.
+        max_nb_scale : int
+            Maximum number of basis functions as a multiple of the initial
+            ``nb``.  Prevents unbounded growth.  Default 3.
+
+        Returns
+        -------
+        bool
+            ``True`` if points were added, ``False`` otherwise.
+        """
+        beta = self._beta
+        X, dX, d2X = self._X, self._dX, self._d2X
+        t = self._t.ravel()
+        phi = self.phi
+
+        # Curvature = |d²ϕ/ds²| at each evaluation point
+        dphi = (np.sum(beta[np.newaxis, :, :] * dX[:, :, np.newaxis], axis=1)
+                + (phi[-1] - phi[1])[np.newaxis, :])
+        d2phi = np.sum(beta[np.newaxis, :, :] * d2X[:, :, np.newaxis], axis=1)
+        dphi_sq = np.sum(dphi * dphi, axis=-1)[:, np.newaxis]
+        d2phids2 = ((d2phi
+                     - dphi * np.sum(dphi * d2phi, axis=-1)[:, np.newaxis]
+                     / dphi_sq) / dphi_sq)
+        kappa = np.sqrt(np.sum(d2phids2 ** 2, axis=-1))   # (n,)
+
+        threshold = curvature_threshold / self._L
+        high_curv = kappa > threshold
+        if not np.any(high_curv):
+            return False
+        max_nb = self._nb * max_nb_scale
+        if self._nb >= max_nb:
+            return False
+
+        # Insert a midpoint for every high-curvature adjacent pair
+        t_new = []
+        for i in range(len(t)):
+            t_new.append(t[i])
+            if i < len(t) - 1 and (high_curv[i] or high_curv[i + 1]):
+                t_new.append(0.5 * (t[i] + t[i + 1]))
+        t_new = np.array(t_new)
+
+        # Evaluate phi at new t-values using the *current* (old) spline
+        t0_old = np.append(
+            np.append([0.] * (self._kb - 1),
+                       np.linspace(0, 1, self._nb + 3 - self._kb)),
+            [1.] * (self._kb - 1))
+        X_new, *_ = helper_functions.Nbspld2(t0_old, t_new, self._kb)
+        phi_lin_new = phi[:1] + (phi[-1:] - phi[:1]) * t_new[:, np.newaxis]
+        phi_new = (np.sum(beta[np.newaxis, :, :] * X_new[:, :, np.newaxis],
+                          axis=1) + phi_lin_new)
+
+        # Linearly interpolate v2 to the new t-values
+        v2_new = np.interp(t_new, t, self.v2.ravel())[:, np.newaxis]
+
+        # Choose new nb: roughly n_new_points / 3, capped at max_nb
+        new_nb = min(max(len(t_new) // 3, self._nb + 1), max_nb)
+        self._rebuild_spline_basis(phi_new, v2_new, nb=new_nb)
+        return True
 
     _forces_rval = namedtuple("forces_rval", "F_norm dV")
     def forces(self):
@@ -189,9 +298,45 @@ class Deformation_Spline:
             F_norm[-1] = 0.0
         return self._forces_rval(F_norm, dV)
 
+    def _fit_phi(self, phi_candidate):
+        """Fit *phi_candidate* to the B-spline; return *(phi_fit, beta_fit)*.
+
+        Does **not** modify any instance attributes.
+        """
+        phi_lin = (phi_candidate[:1]
+                   + (phi_candidate[-1:] - phi_candidate[:1]) * self._t)
+        phi_detrended = phi_candidate - phi_lin
+        beta, *_ = np.linalg.lstsq(self._X, phi_detrended, rcond=-1)
+        phi_fit = (np.sum(beta[np.newaxis, :, :] * self._X[:, :, np.newaxis],
+                          axis=1)
+                   + phi_lin)
+        return phi_fit, beta
+
+    def _forces_at(self, phi_fit, beta):
+        """Evaluate *(F_norm, dV)* at given *phi_fit* / *beta* without
+        modifying any instance attribute.  Mirrors :meth:`forces`."""
+        X, dX, d2X = self._X, self._dX, self._d2X
+        dphi = (np.sum(beta[np.newaxis, :, :] * dX[:, :, np.newaxis], axis=1)
+                + (phi_fit[-1] - phi_fit[1])[np.newaxis, :])
+        d2phi = np.sum(beta[np.newaxis, :, :] * d2X[:, :, np.newaxis], axis=1)
+        dphi_sq = np.sum(dphi * dphi, axis=-1)[:, np.newaxis]
+        dphids = dphi / np.sqrt(dphi_sq)
+        d2phids2 = (d2phi
+                    - dphi * np.sum(dphi * d2phi, axis=-1)[:, np.newaxis] / dphi_sq
+                    ) / dphi_sq
+        dV = self.dV(phi_fit)
+        dV_perp = dV - np.sum(dV * dphids, axis=-1)[:, np.newaxis] * dphids
+        F_norm = d2phids2 * self.v2 - dV_perp
+        if self.fix_start:
+            F_norm[0] = 0.0
+        if self.fix_end:
+            F_norm[-1] = 0.0
+        return self._forces_rval(F_norm, dV)
+
     _step_rval = namedtuple("step_rval", "stepsize step_reversed fRatio")
     def step(self, lastStep, maxstep=.1, minstep=1e-4, reverseCheck=.15,
-             stepIncrease=1.5, stepDecrease=5., checkAfterFit=True):
+             stepIncrease=1.5, stepDecrease=5., checkAfterFit=True,
+             armijo_max_backtrack=0, armijo_beta=0.5):
         """
         Deform the path one step.
 
@@ -218,6 +363,13 @@ class Deformation_Spline:
         checkAfterFit : bool, optional
             If True, the convergence test is performed after the points are fit
             to a spline. If False, it's done beforehand.
+        armijo_max_backtrack : int, optional
+            Maximum number of Armijo back-tracking iterations per step.
+            When > 0, the stepsize is halved (by *armijo_beta*) if the trial
+            step would worsen ``fRatio1`` by more than 10%.  Set to ``0``
+            (default) to disable and preserve the original behaviour.
+        armijo_beta : float, optional
+            Multiplicative reduction factor per Armijo back-track (default 0.5).
 
         Returns
         -------
@@ -262,8 +414,17 @@ class Deformation_Spline:
         F_max = np.max(np.sqrt(np.sum(F*F,-1)))
         dV_max = np.max(np.sqrt(np.sum(dV*dV,-1)))
         fRatio1 = F_max / dV_max
-        # Rescale the normal force so that it's relative to L:
-        F *= self._L / dV_max
+        # Scale-invariant physical ratio: F_max / (barrier_height / path_length).
+        # Converges to 0 iff the path satisfies the transverse EOM regardless of
+        # the absolute energy scale.  Used for monitoring; Phase 7 will make this
+        # the primary convergence criterion for extreme-supercooling scenarios.
+        fRatio_phys = F_max / (self._delta_V / self._L)
+        # Rescale the normal force so that it's relative to L.
+        # Use the larger of the local-gradient scale (dV_max) and the
+        # barrier-height scale (delta_V / L) so that the step size stays
+        # bounded even when dV_max → 0 near a flat-bottomed vacuum.
+        char_force = max(dV_max, self._delta_V / self._L)
+        F *= self._L / char_force
 
         # Now, see how big the stepsize should be
         stepsize = lastStep
@@ -287,6 +448,27 @@ class Deformation_Spline:
         if stepsize > maxstep: stepsize = maxstep
         if stepsize < minstep: stepsize = minstep
 
+        # --- Armijo back-tracking line search (disabled by default) ---
+        # When armijo_max_backtrack > 0, reduce the stepsize if the trial step
+        # worsens fRatio1 by more than 10 %.  Each back-track costs one extra
+        # dV evaluation; the default (0) preserves the original behaviour.
+        if armijo_max_backtrack > 0:
+            _armijo_c = 1.1
+            for _bt in range(armijo_max_backtrack):
+                _phi_t, _beta_t = self._fit_phi(phi + F * stepsize)
+                _F_t, _dV_t = self._forces_at(_phi_t, _beta_t)
+                _fR_t = (np.max(np.sqrt(np.sum(_F_t * _F_t, -1)))
+                         / max(np.max(np.sqrt(np.sum(_dV_t * _dV_t, -1))),
+                               self._delta_V / self._L))
+                if _fR_t <= fRatio1 * _armijo_c:
+                    break
+                _new = stepsize * armijo_beta
+                if _new < minstep:
+                    break
+                stepsize = _new
+                logger.debug("Armijo bt %d: fR_trial=%.3e stepsize=%.2e",
+                             _bt + 1, _fR_t, stepsize)
+
         # Save the state before the step
         self._phi_prev = phi
         self._F_prev = F
@@ -309,15 +491,17 @@ class Deformation_Spline:
         Ffit = (phi-self._phi_prev)/stepsize
         fRatio2 = np.max(np.sqrt(np.sum(Ffit*Ffit,-1)))/self._L
 
-        logger.debug("step: %i; stepsize: %0.2e; fRatio1 %0.2e; fRatio2: %0.2e",
-                     self.num_steps, stepsize, fRatio1, fRatio2)
+        logger.debug("step: %i; stepsize: %0.2e; fRatio1 %0.2e; fRatio2: %0.2e; fRatio_phys: %0.2e",
+                     self.num_steps, stepsize, fRatio1, fRatio2, fRatio_phys)
 
         fRatio = fRatio2 if checkAfterFit else fRatio1
         return self._step_rval(stepsize, step_reversed, fRatio)
 
     def deformPath(self, startstep=2e-3,
                    fRatioConv=.02, converge_0=5., fRatioIncrease=5.,
-                   maxiter=500, callback=None, step_params={}):
+                   maxiter=500, callback=None, step_params={},
+                   osc_window=10, osc_threshold=0.3,
+                   resample_interval=0, resample_params={}):
         """
         Deform the path many individual steps, stopping either when the
         convergence criterium is reached, when the maximum number of iterations
@@ -344,6 +528,16 @@ class Deformation_Spline:
             parameter, and return False if deformation should stop.
         step_params : dict, optional
             Parameters to pass to :func:`step`.
+        osc_window : int, optional
+            Number of recent steps used to detect oscillation.  Set to
+            ``0`` to disable.  Default 10.
+        osc_threshold : float, optional
+            Relative peak-to-peak oscillation threshold.  Default 0.3.
+        resample_interval : int, optional
+            Every this many steps, densify high-curvature path segments.
+            ``0`` (default) disables resampling.
+        resample_params : dict, optional
+            Parameters forwarded to ``_resample_path()``.
 
         Returns
         -------
@@ -355,6 +549,7 @@ class Deformation_Spline:
         minfRatio_index = 0
         minfRatio_beta = None
         minfRatio_phi = None
+        fRatio_history = []   # for oscillation detection
         stepsize = startstep
         deformation_converged = False
         while True:
@@ -362,6 +557,7 @@ class Deformation_Spline:
             stepsize, step_reversed, fRatio = self.step(stepsize, **step_params)
             if callback is not None and not callback(self):
                 break
+            fRatio_history.append(fRatio)
             minfRatio = min(minfRatio, fRatio)
             if fRatio < fRatioConv or (self.num_steps == 1
                                        and fRatio < converge_0*fRatioConv):
@@ -382,6 +578,30 @@ class Deformation_Spline:
                            "Stopping at the point of best convergence.")
                 logger.warning(err_msg)
                 raise DeformationError(err_msg)
+            # Oscillation detection: if fRatio bounces within a window without
+            # net progress, restore the best-seen state and exit gracefully.
+            if (osc_window > 0
+                    and len(fRatio_history) >= osc_window
+                    and minfRatio_beta is not None):
+                _win = np.array(fRatio_history[-osc_window:])
+                _osc_amp = (_win.max() - _win.min()) / (_win.mean() + 1e-30)
+                _stagnant = (minfRatio_index < self.num_steps - 3)
+                if _osc_amp > osc_threshold and _stagnant:
+                    self._beta = minfRatio_beta
+                    self.phi = minfRatio_phi
+                    self.phi_list = self.phi_list[:minfRatio_index]
+                    self.F_list = self.F_list[:minfRatio_index]
+                    logger.warning(
+                        "Path deformation oscillating (amp=%.3e). "
+                        "Returning best result (fRatio=%.3e, step %d).",
+                        _osc_amp, minfRatio, minfRatio_index)
+                    break
+            if (resample_interval > 0
+                    and self.num_steps % resample_interval == 0):
+                if self._resample_path(**resample_params):
+                    logger.debug(
+                        "Path resampled at step %d (nb=%d, n_pts=%d).",
+                        self.num_steps, self._nb, len(self.phi))
             if self.num_steps >= maxiter:
                 logger.warning("Maximum number of deformation iterations reached.")
                 break
@@ -783,7 +1003,7 @@ class SplinePath:
         # Now make the potential spline.
         self._V = V
         self._dV = dV
-        self._V_tck = None
+        self._V_pchip = None
         if V_spline_samples is not None:
             x = np.linspace(0,self.L,V_spline_samples)
             # extend 20% beyond this so that we more accurately model the
@@ -792,32 +1012,31 @@ class SplinePath:
             x = np.append(-x_ext[::-1], x)
             x = np.append(x, self.L+x_ext)
             y = self.V(x)
-            self._V_tck = interpolate.splrep(x,y,s=0)
+            # PCHIP: monotone-preserving cubic Hermite — no spurious oscillations
+            # in V(x) between sample points (important near deep barriers).
+            self._V_pchip = interpolate.PchipInterpolator(x, y, extrapolate=True)
 
     def V(self, x):
         """The potential as a function of the distance `x` along the path."""
-        if self._V_tck is not None:
-            return interpolate.splev(x, self._V_tck, der=0)
-        else:
-            pts = interpolate.splev(x, self._path_tck)
-            return self._V(np.array(pts).T)
+        if self._V_pchip is not None:
+            return self._V_pchip(x)
+        pts = interpolate.splev(x, self._path_tck)
+        return self._V(np.array(pts).T)
 
     def dV(self, x):
         """`dV/dx` as a function of the distance `x` along the path."""
-        if self._V_tck is not None:
-            return interpolate.splev(x, self._V_tck, der=1)
-        else:
-            pts = interpolate.splev(x, self._path_tck)
-            dpdx = interpolate.splev(x, self._path_tck, der=1)
-            dV = self._dV(np.array(pts).T)
-            return np.sum(dV.T*dpdx, axis=0)
+        if self._V_pchip is not None:
+            return self._V_pchip.derivative(1)(x)
+        pts = interpolate.splev(x, self._path_tck)
+        dpdx = interpolate.splev(x, self._path_tck, der=1)
+        dV = self._dV(np.array(pts).T)
+        return np.sum(dV.T*dpdx, axis=0)
 
     def d2V(self, x):
         """`d^2V/dx^2` as a function of the distance `x` along the path."""
-        if self._V_tck is not None:
-            return interpolate.splev(x, self._V_tck, der=2)
-        else:
-            raise RuntimeError("No spline specified. Cannot calculate d2V.")
+        if self._V_pchip is not None:
+            return self._V_pchip.derivative(2)(x)
+        raise RuntimeError("No spline specified. Cannot calculate d2V.")
 
     def pts(self, x):
         """
@@ -976,6 +1195,25 @@ def fullTunneling(
             break
     else:
         logger.warning("Reached maxiter in fullTunneling. No convergence.")
+    # Refine the two path endpoints with L-BFGS-B so that they sit precisely
+    # on local minima of V.  SplinePath.extend_to_minima already handles the
+    # initial extension; this step gives a final gradient-based precision pass.
+    # Failures (non-convergence, exceptions) silently keep the original point.
+    _pts = np.array(pts)  # fresh copy so we can modify rows
+    for _ep_idx in (0, -1):
+        try:
+            _ep_res = optimize.minimize(
+                lambda x: float(np.ravel(V(x))[0]),
+                _pts[_ep_idx],
+                jac=lambda x: np.asarray(dV(x)).ravel(),
+                method='L-BFGS-B',
+                options={'ftol': 1e-12, 'gtol': 1e-8, 'maxiter': 50},
+            )
+            if _ep_res.success:
+                _pts[_ep_idx] = _ep_res.x
+        except Exception:
+            pass
+    pts = _pts
     # Calculate the ratio of max perpendicular force to max gradient.
     # Make sure that we go back a step and use the forces on the path, not the
     # most recently deformed path.

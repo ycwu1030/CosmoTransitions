@@ -230,10 +230,10 @@ class Phase:
         self.X = X
         self.T = T
         self.dXdT = dXdT
-        # Make the spline:
-        k = 3 if len(T) > 3 else 1
-        tck, u = interpolate.splprep(X.T, u=T, s=0, k=k)
-        self.tck = tck
+        # PCHIP interpolant: monotone-preserving cubic Hermite — no spurious
+        # oscillations between nodes, even with unevenly-spaced temperature data.
+        self._pchip = interpolate.PchipInterpolator(T, X, extrapolate=True)
+        self.tck = None  # deprecated; kept for backward compatibility
         # Make default connections
         self.low_trans = set()
         self.high_trans = set()
@@ -247,13 +247,12 @@ class Phase:
         T : float or array_like
         deriv : int
             If deriv > 0, instead return the derivative of the minimum with
-            respect to `T`. Can return up to the third derivative for cubic
-            splines (when ``len(X) > 3``) or first derivative for linear
-            splines.
+            respect to `T`. Can return up to the third derivative.
         """
-        T = np.asanyarray(T).T
-        y = interpolate.splev(T, self.tck)
-        return np.asanyarray(y).T
+        T = np.asanyarray(T)
+        if deriv == 0:
+            return self._pchip(T)
+        return self._pchip.derivative(deriv)(T)
 
     def addLinkFrom(self, other_phase):
         """
