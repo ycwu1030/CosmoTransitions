@@ -17,6 +17,9 @@ import numpy as np
 from scipy import optimize, special, interpolate
 from collections import namedtuple
 from collections.abc import Callable
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from scipy.integrate import simpson
@@ -143,6 +146,7 @@ class SingleFieldInstanton:
             self.phi_bar = self.findBarrierLocation()
         else:
             self.phi_bar = phi_bar
+        self.phi_bar_top = None  # populated by findRScale(); used by _estimate_epsilon()
         if rscale is None:
             self.rscale = self.findRScale()
         else:
@@ -272,6 +276,9 @@ class SingleFieldInstanton:
                 "phi_bar and phi_metaMin. Assume that the barrier does not exist.",
                 "no barrier")
 
+        # Cache the barrier top for _estimate_epsilon() (avoids re-running fminbound)
+        self.phi_bar_top = phi_bar_top
+
         Vtop = self.V(phi_bar_top) - self.V(self.phi_metaMin)
         xtop = phi_bar_top - self.phi_metaMin
         # Cubic function given by (ignoring linear and constant terms):
@@ -300,6 +307,25 @@ class SingleFieldInstanton:
                 if rscale_meta < rscale1 * 100:
                     rscale1 = max(rscale1, rscale_meta)
         return rscale1
+
+    def _estimate_epsilon(self) -> float:
+        R"""
+        Estimate the thin-wall ratio :math:`\varepsilon = \Delta V / \Delta V_{\rm barrier}`.
+
+        :math:`\varepsilon \approx 1` → thick-walled bubble (ordinary FOPT).
+        :math:`\varepsilon \ll 1` → thin-walled bubble (extreme supercooling).
+
+        Returns
+        -------
+        float
+            Thin-wall ratio.  Values > 1 are possible when the vacuum energy
+            difference exceeds the barrier height (non-perturbative regime).
+        """
+        delta_V = self.V(self.phi_metaMin) - self.V(self.phi_absMin)  # > 0
+        V_barrier = self.V(self.phi_bar_top) - self.V(self.phi_metaMin)  # > 0
+        if V_barrier <= 1e-100:
+            return np.inf
+        return float(delta_V / V_barrier)
 
     _exactSolution_rval = namedtuple("exactSolution_rval", "phi dphi")
     def exactSolution(self, r, phi0, dV, d2V):
@@ -644,11 +670,12 @@ class SingleFieldInstanton:
             xguess: float | None = None,
             xtol: float = 1e-6,
             phitol: float = 1e-6,
-            thinCutoff: float = .01,
+            thinCutoff: float | None = None,
             npoints: int = 500,
-            rmin: float = 1e-4,
+            rmin: float | None = None,
             rmax: float = 1e4,
             max_interior_pts: int | None = None,
+            _retry_count: int = 0,
     ) -> profile_rval:
         R"""
         Calculate the bubble profile by iteratively over/undershooting.
@@ -668,15 +695,18 @@ class SingleFieldInstanton:
             Target accuracy in `x`.
         phitol : float, optional
             Fractional error tolerance in integration.
-        thinCutoff : float, optional
+        thinCutoff : float or None, optional
             Equal to `delta_phi_cutoff / (phi_metaMin - phi_absMin)`, where
             `delta_phi_cutoff` is used  in :func:`initialConditions`.
+            If ``None`` (default), the value is auto-derived from the
+            thin-wall ratio :math:`\varepsilon = \Delta V / \Delta V_{\rm barrier}`.
         npoints : int
             Number of points to return in the profile.
-        rmin : float
+        rmin : float or None, optional
             Relative to ``self.rscale``. Sets the smallest starting
             radius, the starting stepsize, and the smallest allowed stepsize
-            (``0.01*rmin``).
+            (``0.01*rmin``).  If ``None`` (default), auto-derived from
+            :math:`\varepsilon` alongside *thinCutoff*.
         rmax : float
             Relative ``self.rscale``. Sets the maximum allowed integration
             distance.
@@ -708,7 +738,26 @@ class SingleFieldInstanton:
         This way, `phi = phi_metaMin` when `x` is zero and
         `phi = phi_absMin` when `x` is  infinity.
         """
-        # Set x parameters
+        # --- Resolve auto parameters from thin-wall ratio ε ---
+        # thinCutoff=None or rmin=None triggers automatic derivation.
+        # For thick-wall potentials (ε≈1) this gives the original defaults;
+        # for thin-wall / extreme supercooling it selects a tighter tier.
+        _auto_mode = (thinCutoff is None or rmin is None)
+        if _auto_mode:
+            try:
+                _epsilon = self._estimate_epsilon()
+            except Exception:
+                _epsilon = 1.0  # fallback: treat as thick-wall
+            from .config import _epsilon_to_params
+            _auto_tc, _auto_rm = _epsilon_to_params(_epsilon)
+            if thinCutoff is None:
+                thinCutoff = _auto_tc
+            if rmin is None:
+                rmin = _auto_rm
+            logger.debug(
+                "findProfile: ε=%g → thinCutoff=%g, rmin=%g",
+                _epsilon, thinCutoff, rmin)
+        # --- Set x parameters ---
         xmin = xtol*10
         xmax = np.inf
         if xguess is not None:
@@ -720,6 +769,8 @@ class SingleFieldInstanton:
             # The relative amount to increase x by if there is no upper bound.
         # --
         # Set r parameters
+        _rmax_orig = rmax          # save unscaled value for potential retry
+        _thinCutoff_used = thinCutoff  # save for tier matching in retry
         rmin *= self.rscale
         dr0 = rmin
         drmin = 0.01*rmin
@@ -811,6 +862,30 @@ class SingleFieldInstanton:
             Phi = np.append(Phi_int, profile.Phi)
             dPhi = np.append(dPhi_int, profile.dPhi)
             profile = self.profile_rval(R,Phi,dPhi, profile.Rerr)
+        # --- Retry with tighter parameters if step-size collapsed ---
+        # Only triggers in auto mode (thinCutoff/rmin were None) when
+        # Rerr is not None (drmin was hit during integration), and we
+        # have not yet reached the tightest parameter tier.
+        if _auto_mode and profile.Rerr is not None and _retry_count < 3:
+            from .config import _PROFILE_PARAM_TIERS
+            _next_tc, _next_rm = None, None
+            for _i in range(len(_PROFILE_PARAM_TIERS) - 1):
+                if _thinCutoff_used >= _PROFILE_PARAM_TIERS[_i][1]:
+                    _next_tc = _PROFILE_PARAM_TIERS[_i + 1][1]
+                    _next_rm = _PROFILE_PARAM_TIERS[_i + 1][2]
+                    break
+            if _next_tc is not None:
+                logger.debug(
+                    "findProfile: Rerr=%g detected (retry %d/3); "
+                    "switching to thinCutoff=%g, rmin=%g",
+                    profile.Rerr, _retry_count + 1, _next_tc, _next_rm)
+                return self.findProfile(
+                    xguess=xguess, xtol=xtol, phitol=phitol,
+                    thinCutoff=_next_tc, npoints=npoints,
+                    rmin=_next_rm, rmax=_rmax_orig,
+                    max_interior_pts=max_interior_pts,
+                    _retry_count=_retry_count + 1,
+                )
         return profile
 
     def findAction(self, profile: profile_rval) -> float:

@@ -345,23 +345,35 @@ class generic_potential():
         """
         Find the gradient of the full effective potential.
 
-        This uses :func:`helper_functions.gradientFunction` to calculate the
-        gradient using finite differences, with differences
-        given by `self.x_eps`. Note that `self.x_eps` is only used directly
-        the first time this function is called, so subsequently changing it
-        will not have an effect.
+        Uses :func:`helper_functions.adaptive_gradient` with a step size that
+        scales as ``eps_rel * |x_i| + eps_abs``, which handles fields near zero
+        (e.g., symmetric phase) much better than the fixed-step
+        :func:`helper_functions.gradientFunction`.  The old cached function is
+        retained for batched / vectorised calls (Ndim == 1) where the overhead
+        of per-point adaptive FD would be prohibitive.
         """
-        try:
-            f = self._gradV
-        except:
-            # Create the gradient function
-            self._gradV = helper_functions.gradientFunction(
-                self.Vtot, self.x_eps, self.Ndim, self.deriv_order)
-            f = self._gradV
-        # Need to add extra axes to T since extra axes get added to X in
-        # the helper function.
-        T = np.asanyarray(T)[...,np.newaxis,np.newaxis]
-        return f(X,T,False)
+        X = np.asanyarray(X)
+        if X.ndim > 1:
+            # Batched call (e.g. from traceMinimum broadcasting) — use the
+            # original cached-closure approach for efficiency.
+            try:
+                f = self._gradV
+            except AttributeError:
+                self._gradV = helper_functions.gradientFunction(
+                    self.Vtot, self.x_eps, self.Ndim, self.deriv_order)
+                f = self._gradV
+            T_ = np.asanyarray(T)[..., np.newaxis, np.newaxis]
+            return f(X, T_, False)
+        # Single-point call: use adaptive FD for accuracy near x ≈ 0.
+        x = X.ravel()
+        eps_abs = self.x_eps * 1e-2  # absolute floor ≈ 1e-5 for x_eps=1e-3
+        return helper_functions.adaptive_gradient(
+            lambda p: float(np.ravel(self.Vtot(p, T))[0]),
+            x,
+            eps_rel=1e-5,
+            eps_abs=eps_abs,
+            order=self.deriv_order,
+        )
 
     def dgradV_dT(self, X, T):
         """
@@ -421,22 +433,20 @@ class generic_potential():
         finite-temperature effective potential.
 
         This uses :func:`helper_functions.hessianFunction` to calculate the
-        matrix using finite differences, with differences
-        given by `self.x_eps`. Note that `self.x_eps` is only used directly
-        the first time this function is called, so subsequently changing it
-        will not have an effect.
+        matrix using finite differences, with differences given by `self.x_eps`.
+        Note that `self.x_eps` is only used directly the first time this
+        function is called, so subsequently changing it will not have an effect.
         """
         try:
             f = self._d2V
-        except:
-            # Create the gradient function
+        except AttributeError:
             self._d2V = helper_functions.hessianFunction(
                 self.Vtot, self.x_eps, self.Ndim, self.deriv_order)
             f = self._d2V
         # Need to add extra axes to T since extra axes get added to X in
         # the helper function.
-        T = np.asanyarray(T)[...,np.newaxis]
-        return f(X,T, False)
+        T = np.asanyarray(T)[..., np.newaxis]
+        return f(X, T, False)
 
     def energyDensity(self,X,T,include_radiation=True):
         T_eps = self.T_eps
@@ -549,6 +559,17 @@ class generic_potential():
         points = []
         for x0 in self.approxZeroTMin():
             points.append([x0,tmin])
+        # Always seed the field origin at T=tstop as a potential symmetric-phase
+        # starting point.  Seeding at high T (rather than T=0) ensures that
+        # fmin finds the *positive* symmetric minimum — at T=0 the origin is
+        # typically not a local minimum in CW-like models, so fmin(origin,T=0)
+        # drifts to the broken minimum and the symmetric phase is missed.  At
+        # T=tstop the thermal barrier makes phi=0 a proper local minimum.
+        # The coverage check in traceMultiMin suppresses this seed automatically
+        # when the origin is already covered by another phase.
+        x_origin = np.zeros(self.Ndim)
+        if self.forbidPhaseCrit is None or not self.forbidPhaseCrit(x_origin):
+            points.append([x_origin, tstop])
         tracingArgs_ = dict(forbidCrit=self.forbidPhaseCrit)
         tracingArgs_.update(tracingArgs)
         phases = transitionFinder.traceMultiMin(
@@ -588,7 +609,8 @@ class generic_potential():
                 - self.energyDensity(xlow,T,False)
         return self.TcTrans
 
-    def findAllTransitions(self, tunnelFromPhase_args: dict = {}) -> list[dict]:
+    def findAllTransitions(self, tunnelFromPhase_args: dict = {},
+                            tunneling_config=None) -> list[dict]:
         """
         Find all phase transitions up to `self.Tmax`, storing the transitions
         in `self.TnTrans`.
@@ -610,6 +632,9 @@ class generic_potential():
         ----------
         tunnelFromPhase_args : dict
             Parameters to pass to :func:`transitionFinder.tunnelFromPhase`.
+        tunneling_config : TunnelingConfig or None, optional
+            Configuration object forwarded to
+            :func:`transitionFinder.findAllTransitions`.
 
         Returns
         -------
@@ -618,7 +643,8 @@ class generic_potential():
         if self.phases is None:
             self.getPhases()
         self.TnTrans = transitionFinder.findAllTransitions(
-            self.phases, self.Vtot, self.gradV, tunnelFromPhase_args)
+            self.phases, self.Vtot, self.gradV, tunnelFromPhase_args,
+            tunneling_config=tunneling_config)
         # Add in the critical temperature
         if self.TcTrans is None:
             self.calcTcTrans()

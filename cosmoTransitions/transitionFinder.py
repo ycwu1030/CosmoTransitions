@@ -22,6 +22,7 @@ from scipy import linalg, interpolate, optimize
 
 from . import pathDeformation
 from . import tunneling1D
+from .config import TunnelingConfig
 
 import logging
 logger = logging.getLogger(__name__)
@@ -114,7 +115,12 @@ def traceMinimum(
     logger.debug("traceMinimum t0 = %0.6g", t0)
     Ndim = len(x0)
     M0 = d2f_dx2(x0,t0)
-    minratio *= min(abs(linalg.eigvalsh(M0)))/max(abs(linalg.eigvalsh(M0)))
+    _eigs0 = linalg.eigvalsh(M0)
+    _eig_ratio_0 = min(abs(_eigs0)) / max(abs(_eigs0))
+    # S-6.8: apply the initial eigenvalue ratio but never let the effective
+    # threshold drop below minratio * 0.01, so a badly-conditioned starting
+    # Hessian doesn't make the spinodal detector blind.
+    minratio = max(minratio * _eig_ratio_0, minratio * 0.01)
 
     def dxmindt(x,t):
         M = d2f_dx2(x,t)
@@ -177,7 +183,19 @@ def traceMinimum(
                 dt *= .5
                 overX, overT = xnext, tnext
         # Now do some checks on dt.
-        if abs(dt) < abs(dtmin):
+        # S-6.6: near the spinodal the Hessian becomes ill-conditioned, so
+        # allow the step to be much smaller before declaring a transition.
+        _M = d2f_dx2(x, t)
+        _eigs = abs(linalg.eigvalsh(_M))
+        _eig_max = _eigs.max() + 1e-100
+        _eig_min = _eigs.min()
+        _cond_ratio = _eig_min / _eig_max
+        if _cond_ratio < 1e-4:
+            # Flatten the floor: allow steps down to dtmin * max(ratio/1e-4, 1e-3)
+            effective_dtmin = dtmin * max(_cond_ratio / 1e-4, 1e-3)
+        else:
+            effective_dtmin = dtmin
+        if abs(dt) < abs(effective_dtmin):
             # Found a transition! Or at least a point where the step is really
             # small.
             break
@@ -382,6 +400,11 @@ def traceMultiMin(
                 t1 > max(phase.T[0], phase.T[-1])):
                 continue
             x = fmin(phase.valAt(t1), t1)
+            # Guard: if x1 is very near the field origin (|x1| < deltaX_target),
+            # it may be the symmetric phase starting point — never mark it as
+            # "already covered" by a broken phase far from zero (Issue #1).
+            if np.max(np.abs(x1)) < deltaX_target:
+                continue  # always trace points that are at/near φ = 0
             if np.sum((x-x1)**2)**.5 < 2*deltaX_target:
                 # The point is already covered
                 # Skip this phase and change the linkage.
@@ -546,6 +569,12 @@ def removeRedundantPhases(f, phases, xeps=1e-5, diftol=1e-2):
     def fmin(x,t):
         return np.array(optimize.fmin(f, x, args=(t,),
                         xtol=xeps, ftol=np.inf, disp=False))
+    def _energy_same(x1, x2, t):
+        """True when x1 and x2 have nearly equal potential energy (relative tol)."""
+        V1 = float(np.ravel(f(x1, t))[0])
+        V2 = float(np.ravel(f(x2, t))[0])
+        scale = max(abs(V1), abs(V2), 1e-30)
+        return abs(V1 - V2) / scale < 1e-4
     has_redundant_phase = True
     while has_redundant_phase:
         has_redundant_phase = False
@@ -567,7 +596,7 @@ def removeRedundantPhases(f, phases, xeps=1e-5, diftol=1e-2):
                 else:
                     x2 = fmin(phase2.valAt(tmax), tmax)
                 dif = np.sum((x1-x2)**2)**.5
-                same_at_tmax = (dif < diftol)
+                same_at_tmax = (dif < diftol) or _energy_same(x1, x2, tmax)
                 if tmin == phase1.T[0]:
                     x1 = phase1.X[0]
                 else:
@@ -577,7 +606,7 @@ def removeRedundantPhases(f, phases, xeps=1e-5, diftol=1e-2):
                 else:
                     x2 = fmin(phase2.valAt(tmin), tmin)
                 dif = np.sum((x1-x2)**2)**.5
-                same_at_tmin = (dif < diftol)
+                same_at_tmin = (dif < diftol) or _energy_same(x1, x2, tmin)
                 if same_at_tmin and same_at_tmax:
                     # Phases are redundant
                     has_redundant_phase = True
@@ -671,6 +700,21 @@ def _tunnelFromPhaseAtT(T, phases, start_phase, V, dV,
         return nuclCriterion(outdict[T]['action'], T)
 
     def fmin(x):
+        """Refine a minimum using L-BFGS-B (falls back to Nelder-Mead)."""
+        x = np.atleast_1d(np.asarray(x, dtype=float))
+        try:
+            res = optimize.minimize(
+                lambda p: float(np.ravel(V(p, T))[0]),
+                x,
+                jac=lambda p: np.atleast_1d(np.asarray(dV(p, T), dtype=float).ravel()),
+                method='L-BFGS-B',
+                options={'ftol': 1e-15, 'gtol': phitol, 'maxiter': 200},
+            )
+            if res.success or res.fun < float(np.ravel(V(x, T))[0]):
+                return res.x
+        except Exception:
+            pass
+        # Fallback: Nelder-Mead
         return optimize.fmin(V, x, args=(T,),
                              xtol=phitol, ftol=np.inf, disp=False)
 
@@ -794,8 +838,9 @@ def tunnelFromPhase(
         maxiter: int = 100,
         phitol: float = 1e-8,
         overlapAngle: float = 45.0,
-        nuclCriterion: Callable[[float, float], float] = lambda S, T: S / (T + 1e-100) - 140.0,
+        nuclCriterion: "Callable[[float, float], float] | None" = None,
         fullTunneling_params: dict = {},
+        tunneling_config: "TunnelingConfig | None" = None,
 ) -> "dict | None":
     """
     Find the instanton and nucleation temeprature for tunneling from
@@ -820,12 +865,17 @@ def tunnelFromPhase(
     overlapAngle : float, optional
         If two phases are in the same direction, only try tunneling to the
         closer one. Set to zero to always try tunneling to all available phases.
-    nuclCriterion : callable
+    nuclCriterion : callable or None, optional
         Function of the action *S* and temperature *T*. Should return 0 for the
         correct nucleation rate, > 0 for a low rate and < 0 for a high rate.
-        Defaults to ``S/T - 140``.
+        Defaults to ``S/T - 140`` (or ``tunneling_config.get_nucl_criterion()``
+        if *tunneling_config* is provided and *nuclCriterion* is ``None``).
     fullTunneling_params : dict
         Parameters to pass to :func:`pathDeformation.fullTunneling`.
+    tunneling_config : TunnelingConfig or None, optional
+        Configuration object.  When provided and *nuclCriterion* is ``None``,
+        the nucleation criterion is taken from
+        ``tunneling_config.get_nucl_criterion()``.
 
     Returns
     -------
@@ -845,6 +895,12 @@ def tunnelFromPhase(
         - *trantype* : 1 or 2 for first or second-order transitions.
     """
     outdict = {}  # keys are T values
+    # --- Resolve nucleation criterion ---
+    if nuclCriterion is None:
+        if tunneling_config is not None:
+            nuclCriterion = tunneling_config.get_nucl_criterion()
+        else:
+            nuclCriterion = lambda S, T: S / (T + 1e-100) - 140.0
     args = (phases, start_phase, V, dV,
             phitol, overlapAngle, nuclCriterion,
             fullTunneling_params, outdict)
@@ -985,6 +1041,7 @@ def findAllTransitions(
         V: Callable[[np.ndarray, float], float],
         dV: Callable[[np.ndarray, float], np.ndarray],
         tunnelFromPhase_args: dict = {},
+        tunneling_config: "TunnelingConfig | None" = None,
 ) -> list[dict]:
     """
     Find the complete phase transition history for the potential `V`.
@@ -1005,6 +1062,8 @@ def findAllTransitions(
         value (which should be an array, not a scalar) and a temperature.
     tunnelFromPhase_args : dict
         Parameters to pass to :func:`tunnelFromPhase`.
+    tunneling_config : TunnelingConfig or None, optional
+        Configuration object forwarded to :func:`tunnelFromPhase`.
 
     Returns
     -------
@@ -1020,6 +1079,7 @@ def findAllTransitions(
     while start_phase is not None:
         del phases[start_phase.key]
         trans = tunnelFromPhase(phases, start_phase, V, dV, Tmax,
+                                tunneling_config=tunneling_config,
                                 **tunnelFromPhase_args)
         if trans is None and not start_phase.low_trans:
             start_phase = None
