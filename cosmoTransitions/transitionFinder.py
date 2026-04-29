@@ -462,6 +462,9 @@ def traceMultiMin(
                 if linkedFrom is not None:
                     newphase.addLinkFrom(phases[linkedFrom])
                 phases[phase_key] = newphase
+                logger.info("traceMultiMin: added phase %d, T=[%.4g, %.4g], X=[%.4g...%.4g]",
+                            phase_key, newphase.T[0], newphase.T[-1],
+                            newphase.X[0].flat[0], newphase.X[-1].flat[0])
             else:
                 # The phase is just a single point.
                 # Don't add it, and make it a dead-end.
@@ -784,7 +787,10 @@ def _tunnelFromPhaseAtT(T, phases, start_phase, V, dV,
             lowest_action = tdict['action']
             lowest_tdict = tdict
     outdict[T] = lowest_tdict
-    return nuclCriterion(lowest_action, T)
+    crit_val = nuclCriterion(lowest_action, T)
+    logger.debug("_tunnelFromPhaseAtT: T=%.4g, action=%.4g, S3/T=%.4g, criterion=%.4g",
+                 T, lowest_action, lowest_action / (T + 1e-100), crit_val)
+    return crit_val
 
 
 def _potentialDiffForPhase(T, start_phase, other_phases, V):
@@ -901,6 +907,19 @@ def tunnelFromPhase(
             nuclCriterion = tunneling_config.get_nucl_criterion()
         else:
             nuclCriterion = lambda S, T: S / (T + 1e-100) - 140.0
+    # --- Wire V_spline_samples from config into fullTunneling_params ---
+    if tunneling_config is not None and 'V_spline_samples' not in fullTunneling_params:
+        fullTunneling_params = {
+            'V_spline_samples': tunneling_config.V_spline_samples,
+            **fullTunneling_params,
+        }
+    # --- Wire deformation params from config ---
+    if (tunneling_config is not None
+            and 'deformation_deform_params' not in fullTunneling_params):
+        fullTunneling_params = {
+            'deformation_deform_params': tunneling_config.get_deform_params(),
+            **fullTunneling_params,
+        }
     args = (phases, start_phase, V, dV,
             phitol, overlapAngle, nuclCriterion,
             fullTunneling_params, outdict)
@@ -910,6 +929,8 @@ def tunnelFromPhase(
         T_highest_other = max(T_highest_other, phase.T[-1])
     Tmax = min(Tmax, T_highest_other)
     assert Tmax >= Tmin
+    logger.info("tunnelFromPhase: phase %s, searching Tn in [%.4g, %.4g]",
+                start_phase.key, Tmin, Tmax)
     try:
         Tnuc = optimize.brentq(_tunnelFromPhaseAtT, Tmin, Tmax, args=args,
                                xtol=Ttol, maxiter=maxiter, disp=False)
@@ -917,38 +938,84 @@ def tunnelFromPhase(
         if err.args[0] != "f(a) and f(b) must have different signs":
             raise
         if nuclCriterion(outdict[Tmax]['action'], Tmax) > 0:
-            if nuclCriterion(outdict[Tmin]['action'], Tmax) < 0:
-                # tunneling *may* be possible. Find the minimum.
-                # It's important to make an appropriate initial guess;
-                # otherwise the minimization routine may get get stuck in a
-                # region where the action is infinite. Modify Tmax.
-                Tmax = _maxTCritForPhase(phases, start_phase, V, Ttol)
+            # brentq failed: criterion > 0 at both endpoints (both > threshold).
+            # Check the original condition: if action(Tmin)/Tmax is small enough
+            # it means a sign change exists between Tmin and some interior T.
+            _orig_cond = nuclCriterion(outdict[Tmin]['action'], Tmax) < 0
+            # Extended-scan fallback: when the original condition fails but
+            # Tmin is near 0 (conformal-CW / zero-T quantum barrier case),
+            # use fmin with a log-space initial guess to find the S3/T minimum.
+            _do_extended = (
+                not _orig_cond
+                and tunneling_config is not None
+                and tunneling_config.T_scan_extension
+                and Tmin < 1e-4 * Tmax
+            )
+            if _orig_cond or _do_extended:
+                # tunneling *may* be possible. Find the minimum of S3/T.
+                Tmax_Tc = _maxTCritForPhase(phases, start_phase, V, Ttol)
+                if _do_extended:
+                    # At very low T the symmetric phase may not be a stable
+                    # local minimum → fmin starting near T=0 always returns
+                    # action=inf.  Use a log-scan starting at 10% of Tmax_Tc,
+                    # descending decade-by-decade, to find a T where criterion<0.
+                    n_extend = tunneling_config.T_scan_max_extend
+                    Tneg = None
+                    for k in range(1, n_extend + 1):
+                        T_try = Tmax_Tc * 10.0**(-k)
+                        if T_try < Ttol:
+                            break
+                        crit_try = _tunnelFromPhaseAtT(
+                            T_try, phases, start_phase, V, dV,
+                            phitol, overlapAngle, nuclCriterion,
+                            fullTunneling_params, outdict)
+                        logger.info(
+                            "tunnelFromPhase: T_scan_extension k=%d T=%.4g "
+                            "S3/T=%.4g", k, T_try,
+                            outdict[T_try]['action'] / (T_try + 1e-100))
+                        if np.isfinite(crit_try) and crit_try < 0:
+                            Tneg = T_try
+                            break
+                    if Tneg is None:
+                        logger.info("tunnelFromPhase: no nucleation found "
+                                    "(T_scan_extension: no T with S3/T < threshold)")
+                        return None
+                    Tnuc = optimize.brentq(
+                        _tunnelFromPhaseAtT, Tneg, Tmax_Tc,
+                        args=args, xtol=Ttol, maxiter=maxiter, disp=False)
+                else:
+                    _Tstart = 0.5 * (Tmin + Tmax_Tc)
 
-                def abort_fmin(T, outdict=outdict, nc=nuclCriterion):
-                    T = T[0]  # T is an array of size 1
-                    if nc(outdict[T]['action'], T) <= 0:
-                        raise StopIteration(T)
+                    def abort_fmin(T, outdict=outdict, nc=nuclCriterion):
+                        T = T[0]  # T is an array of size 1
+                        if nc(outdict[T]['action'], T) <= 0:
+                            raise StopIteration(T)
 
-                try:
-                    Tmin = optimize.fmin(_tunnelFromPhaseAtT, 0.5*(Tmin+Tmax),
-                                         args=args, xtol=Ttol*10, ftol=1.0,
-                                         maxiter=maxiter, disp=0,
-                                         callback=abort_fmin)[0]
-                except StopIteration as err:
-                    Tmin = err.args[0]
-                if nuclCriterion(outdict[Tmin]['action'], Tmin) > 0:
-                    # no tunneling possible
-                    return None
-                Tnuc = optimize.brentq(
-                    _tunnelFromPhaseAtT, Tmin, Tmax,
-                    args=args, xtol=Ttol, maxiter=maxiter, disp=False)
+                    try:
+                        Tmin_opt = optimize.fmin(_tunnelFromPhaseAtT, _Tstart,
+                                                 args=args, xtol=Ttol*10,
+                                                 ftol=1.0, maxiter=maxiter,
+                                                 disp=0, callback=abort_fmin)[0]
+                    except StopIteration as se:
+                        Tmin_opt = se.args[0]
+                    if nuclCriterion(outdict[Tmin_opt]['action'], Tmin_opt) > 0:
+                        # no tunneling possible
+                        logger.info("tunnelFromPhase: no nucleation found (S/T always > threshold)")
+                        return None
+                    Tnuc = optimize.brentq(
+                        _tunnelFromPhaseAtT, Tmin_opt, Tmax_Tc,
+                        args=args, xtol=Ttol, maxiter=maxiter, disp=False)
             else:
                 # no tunneling possible
+                logger.info("tunnelFromPhase: no nucleation found (S/T < threshold at all T)")
                 return None
         else:
             # tunneling happens right away at Tmax
             Tnuc = Tmax
     rdict = outdict[Tnuc]
+    logger.info("tunnelFromPhase: found Tn=%.6g, S3/T=%.4g (trantype=%d)",
+                Tnuc, rdict.get('action', float('nan')) / (Tnuc + 1e-100),
+                rdict.get('trantype', 0))
     rdict['betaHn_GW'] = 0.0
     if rdict['trantype'] == 1:
         outdict_tmp = {}
@@ -1076,12 +1143,24 @@ def findAllTransitions(
     start_phase = phases[getStartPhase(phases, V)]
     Tmax = start_phase.T[-1]
     transitions = []
+    # Merge config-provided tunnelFromPhase defaults.
+    # Explicit tunnelFromPhase_args take precedence over config.
+    if tunneling_config is not None:
+        _cfg_kwargs = tunneling_config.get_tunnelFromPhase_kwargs()
+        _merged_args = {**_cfg_kwargs, **tunnelFromPhase_args}
+        tunneling_config.apply_log_level()
+    else:
+        _merged_args = tunnelFromPhase_args
+    logger.info("findAllTransitions: starting phase %s, Tmax=%.4g",
+                start_phase.key, Tmax)
     while start_phase is not None:
         del phases[start_phase.key]
         trans = tunnelFromPhase(phases, start_phase, V, dV, Tmax,
                                 tunneling_config=tunneling_config,
-                                **tunnelFromPhase_args)
+                                **_merged_args)
         if trans is None and not start_phase.low_trans:
+            logger.info("findAllTransitions: no transition from phase %s",
+                        start_phase.key)
             start_phase = None
         elif trans is None:
             low_key = None
@@ -1098,8 +1177,15 @@ def findAllTransitions(
                 start_phase = None
         else:
             transitions.append(trans)
+            logger.info("findAllTransitions: %s-order transition at Tn=%.4g, "
+                        "S3/T=%.4g, %s->%s",
+                        'first' if trans['trantype'] == 1 else 'second',
+                        trans['Tnuc'], trans['action'] / (trans['Tnuc'] + 1e-100),
+                        trans['high_phase'], trans['low_phase'])
             start_phase = phases[trans['low_phase']]
             Tmax = trans['Tnuc']
+    logger.info("findAllTransitions: done, %d transition(s) found",
+                len(transitions))
     return transitions
 
 

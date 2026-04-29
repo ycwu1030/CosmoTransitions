@@ -570,6 +570,8 @@ class generic_potential():
         x_origin = np.zeros(self.Ndim)
         if self.forbidPhaseCrit is None or not self.forbidPhaseCrit(x_origin):
             points.append([x_origin, tstop])
+        logger.info("getPhases: seeding %d point(s), Tmax=%.4g",
+                    len(points), tstop)
         tracingArgs_ = dict(forbidCrit=self.forbidPhaseCrit)
         tracingArgs_.update(tracingArgs)
         phases = transitionFinder.traceMultiMin(
@@ -579,6 +581,11 @@ class generic_potential():
         self.phases = phases
         transitionFinder.removeRedundantPhases(
             self.Vtot, phases, self.x_eps*1e-2, self.x_eps*10)
+        logger.info("getPhases: found %d phase(s)", len(self.phases))
+        for key, phase in self.phases.items():
+            logger.debug("  Phase %s: T=[%.4g, %.4g], X=[%.4g, ..., %.4g]",
+                         key, phase.T[0], phase.T[-1],
+                         phase.X[0].flat[0], phase.X[-1].flat[0])
         return self.phases
 
     def calcTcTrans(self, startHigh: bool = False) -> list[dict]:

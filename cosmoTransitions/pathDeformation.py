@@ -1173,6 +1173,9 @@ def fullTunneling(
             tobj = tunneling_class(0.0, path.L, path.V, path.dV, None,
                                    **tunneling_init_params)
         profile1D = tobj.findProfile(**tunneling_findProfile_params)
+        _action_iter = tobj.findAction(profile1D)
+        logger.debug("fullTunneling: iter %d/%d: action=%.6g",
+                     num_iter, maxiter, _action_iter)
         phi, dphi = profile1D.Phi, profile1D.dPhi
         phi, dphi = tobj.evenlySpacedPhi(phi, dphi, npoints=len(phi),
                                          fixAbs=False)
