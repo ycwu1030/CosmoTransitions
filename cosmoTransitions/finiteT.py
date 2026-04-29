@@ -201,7 +201,7 @@ _tckf_neg = interpolate.splrep(_xf_neg, _yf_neg)
 
 def Jf_spline(X, n=0):
     """Jf interpolated from a saved spline. Input is (m/T)^2."""
-    X = numpy.array(X, copy=False)
+    X = numpy.asarray(X)
     x = X.ravel()
     y = interpolate.splev(x, _tckf, der=n).ravel()
     y[x > _xfmax] = 0
@@ -256,7 +256,7 @@ _tckb_neg = interpolate.splrep(_xb_neg, _yb_neg)
 
 def Jb_spline(X, n=0):
     """Jb interpolated from a saved spline. Input is (m/T)^2."""
-    X = numpy.array(X, copy=False)
+    X = numpy.asarray(X)
     x = X.ravel()
     y = interpolate.splev(x, _tckb, der=n).ravel()
     y[x > _xbmax] = 0
