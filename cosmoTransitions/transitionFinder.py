@@ -452,9 +452,19 @@ def traceMultiMin(
                 X = np.append(X_down, X_up[1:], 0)
                 T = np.append(T_down, T_up[1:], 0)
                 dXdT = np.append(dXdT_down, dXdT_up[1:], 0)
-            if forbidCrit is not None and (forbidCrit(X[0]) or
-                                           forbidCrit(X[-1])):
-                # The phase is forbidden.
+            # S-7: Strip forbidden endpoints instead of rejecting the whole
+            # phase.  A symmetric phase whose minimum migrates into the
+            # forbidden region at low T is still physically valid for the
+            # temperature range where it is allowed.  Stripping forbidden
+            # endpoints preserves that valid sub-segment.
+            if forbidCrit is not None:
+                while len(X) > 1 and forbidCrit(X[0]):
+                    X, T, dXdT = X[1:], T[1:], dXdT[1:]
+                while len(X) > 1 and forbidCrit(X[-1]):
+                    X, T, dXdT = X[:-1], T[:-1], dXdT[:-1]
+            if (forbidCrit is not None and
+                    (len(X) <= 1 or forbidCrit(X[0]) or forbidCrit(X[-1]))):
+                # The phase remains entirely forbidden even after truncation.
                 # Don't add it, and make it a dead-end.
                 nextPoint = nextPoint[:oldNumPoints]
             elif len(X) > 1:
@@ -637,13 +647,20 @@ def removeRedundantPhases(f, phases, xeps=1e-5, diftol=1e-2):
                         _removeRedundantPhase(phases, p_high, newphase)
                     break
                 elif same_at_tmin or same_at_tmax:
-                    raise NotImplementedError(
-                        "Two phases have been found to coincide at one end "
-                        "but not the other. Ideally, this function would "
-                        "find where the two diverge, make a cut, and join them "
-                        "such there are no more phase redundancies.\n"
-                        "Instead, just raise an exception."
+                    # Two phases coincide at one end but not the other.
+                    # This is the normal FOPT spinodal scenario: the broken
+                    # phase merges with the symmetric phase (φ→0) at the
+                    # spinodal temperature, so they share a field-space point
+                    # at that end while being genuinely distinct elsewhere.
+                    # Joining/cutting them is not appropriate here; keep both
+                    # phases as independent entries.
+                    logger.debug(
+                        "removeRedundantPhases: phases %s and %s coincide at "
+                        "one end (tmin=%g, tmax=%g) but not the other — "
+                        "treating as distinct phases (spinodal boundary).",
+                        i, j, tmin, tmax
                     )
+                    continue
             if has_redundant_phase:
                 break
 
