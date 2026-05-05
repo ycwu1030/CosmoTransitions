@@ -1,30 +1,52 @@
-"""
-TunnelingConfig — centralized numerical configuration.
+"""TunnelingConfig — centralized numerical configuration.
 
 Holds numerical parameters that are independent of the model physics and
 are propagated through the tunneling pipeline (``findAllTransitions``,
-``tunnelFromPhase``, etc.). Use a `TunnelingConfig` instance to control
+``tunnelFromPhase``, etc.). Use a ``TunnelingConfig`` instance to control
 integration tolerances, deformation settings, logging, and other runtime
 parameters without changing model code.
 
-Typical usage::
+This module also provides small helpers used by the tunneling machinery,
+notably the built-in nucleation-criterion functions and the
+``enable_logging`` helper.
+"""
 
+from __future__ import annotations
+
+import os
+import sys
+import logging
+from dataclasses import dataclass
+from typing import Callable, Optional, Union
+
+import numpy as np
+
+
+def fixed_140_nucl_criterion(S: float, T: float) -> float:
+    """Nucleation criterion with a fixed threshold of 140.
+
+    Returns ``S/T - 140``; a negative value indicates nucleation has occurred.
+    This is the historical default used in cosmoTransitions.
+
+    Parameters
+    ----------
+    S : float
+        Euclidean action S3 (units GeV).
+    T : float
+        Temperature (GeV).
+
+    Returns
+    -------
+    float
+        Negative values indicate nucleation (criterion satisfied).
     """
-    Configuration object for tunneling/transition searches.
+    return S / (T + 1e-100) - 140.0
 
-    This dataclass centralizes numerical parameters that control the
-    tunneling pipeline (phase tracing, profile finding, path deformation,
-    and nucleation searches). Populate a `TunnelingConfig` and pass it to
-    `model.findAllTransitions(tunneling_config=cfg)` to customize behavior.
 
-    The most relevant fields are documented near their declarations below.
-    """
-        S: float,
-        T: float,
-        M_Pl: float = 1.22e19,
-) -> float:
-    r"""
-    Cosmological nucleation criterion for a radiation-dominated Universe:
+def cosmological_nucl_criterion(S: float, T: float, M_Pl: float = 1.22e19) -> float:
+    r"""Cosmological nucleation criterion for a radiation-dominated Universe.
+
+    The criterion solves
 
     .. math::
         \frac{S_3}{T} - 4 \ln\left(\frac{M_{\rm Pl}}{T}\right) = 0
@@ -58,7 +80,7 @@ Typical usage::
 
 @dataclass
 class TunnelingConfig:
-    """
+    r"""
     Configuration object for tunneling/transition searches.
 
     This dataclass centralizes numerical parameters that control the
@@ -67,7 +89,7 @@ class TunnelingConfig:
     `model.findAllTransitions(tunneling_config=cfg)` to customize behavior.
 
     The most relevant fields are documented near their declarations below.
-    """
+
     Notes
     -----
     A ``TunnelingConfig`` instance may be passed optionally to
@@ -317,20 +339,20 @@ class TunnelingConfig:
     # ------------------------------------------------------------------
 
     @classmethod
-        def supercooling_preset(cls) -> "TunnelingConfig":
-                """Preset tuned for extreme supercooling (T_n/T_c ≲ 0.05).
+    def supercooling_preset(cls) -> "TunnelingConfig":
+        r"""Preset tuned for extreme supercooling (T_n/T_c ≲ 0.05).
 
-                Key features:
+        Key features:
 
-                * ``V_spline_samples=None`` — required for extreme supercooling so that
-                    narrow thermal barriers near \phi ~ T_n are resolved by direct calls
-                    to ``Vtot`` rather than coarse pre-sampling.
-                * Strict integration tiers: ``thinCutoff=1e-4``, ``rmin=1e-7`` for
-                    thin-wall instantons.
-                * Enable temperature-scan extension (up to 5 extensions, each lowering
-                    the lower bound by ×0.1) to find very low T_n values.
-                * ``Ttol=1.0``: for T_n typically O(1e4) GeV, GeV-level precision is adequate.
-                """
+        * ``V_spline_samples=None`` — required for extreme supercooling so that
+          narrow thermal barriers near \phi ~ T_n are resolved by direct calls
+          to ``Vtot`` rather than coarse pre-sampling.
+        * Strict integration tiers: ``thinCutoff=1e-4``, ``rmin=1e-7`` for
+          thin-wall instantons.
+        * Enable temperature-scan extension (up to 5 extensions, each lowering
+          the lower bound by ×0.1) to find very low T_n values.
+        * ``Ttol=1.0``: for T_n typically O(1e4) GeV, GeV-level precision is adequate.
+        """
         return cls(
             V_spline_samples=None,
             thinCutoff=1e-4,
@@ -429,7 +451,7 @@ _PROFILE_PARAM_TIERS: list[tuple[float, float, float]] = [
 
 
 def _epsilon_to_params(epsilon: float) -> tuple[float, float]:
-    """
+    r"""
     Return the `(thinCutoff, rmin)` tier parameters selected by the thin-wall ratio \epsilon.
 
     Parameters

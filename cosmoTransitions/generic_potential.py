@@ -11,6 +11,7 @@ several methods for plotting the potential and its phases.
 """
 
 import numpy as np
+from numpy.typing import ArrayLike
 from scipy import optimize
 
 from .finiteT import Jb_spline as Jb
@@ -139,7 +140,7 @@ class generic_potential():
         """
         return X[...,0]*0
 
-    def boson_massSq(self, X: np.ndarray, T: float) -> tuple:
+    def boson_massSq(self, X: np.ndarray, T: ArrayLike) -> tuple:
         """
         Calculate the boson particle spectrum. Should be overridden by
         subclasses.
@@ -306,7 +307,7 @@ class generic_potential():
         y = self.V1T(bosons, fermions, T, include_radiation)
         return y
 
-    def Vtot(self, X: np.ndarray, T: float, include_radiation: bool = True) -> np.ndarray:
+    def Vtot(self, X: np.ndarray, T: ArrayLike, include_radiation: bool = True) -> np.ndarray:
         """
         The total finite temperature effective potential.
 
@@ -341,7 +342,7 @@ class generic_potential():
         X0 = np.zeros(self.Ndim)
         return self.Vtot(X,T,False) - self.Vtot(X0,T,False)
 
-    def gradV(self, X: np.ndarray, T: float) -> np.ndarray:
+    def gradV(self, X: np.ndarray, T: ArrayLike) -> np.ndarray:
         """
         Find the gradient of the full effective potential.
 
