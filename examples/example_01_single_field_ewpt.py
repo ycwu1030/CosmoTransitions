@@ -319,7 +319,7 @@ def make_plots(
     TnTrans: list,
     save_path: str | None = None,
 ) -> None:
-    """
+    r"""
     Prepare and save a two-panel figure.
 
     Left: phase trajectories $\phi(T)$ with $T_c$ and $T_n$ marked.
@@ -376,7 +376,7 @@ def make_plots(
         ax.plot(Tn, phi_n, "s", color="crimson", ms=8, zorder=5)
 
     ax.set_xlabel("Temperature $T$ / GeV", fontsize=12)
-    ax.set_ylabel("Field value $\phi$ / GeV", fontsize=12)
+    ax.set_ylabel(r"Field value $\phi$ / GeV", fontsize=12)
     ax.set_title("Phase trajectories", fontsize=12)
     ax.legend(fontsize=10, loc="upper right")
     ax.grid(True, alpha=0.3)
@@ -420,7 +420,7 @@ def make_plots(
 
         ax.set_xscale("log")
         ax.set_xlabel("$r$ / GeV$^{-1}$", fontsize=12)
-        ax.set_ylabel("$\phi(r)$ / GeV", fontsize=12)
+        ax.set_ylabel(r"$\phi(r)$ / GeV", fontsize=12)
         ax.set_title(f"Bounce profile ($T_n$ = {Tn:.2f} GeV)", fontsize=12)
         ax.legend(fontsize=9, loc="upper left")
         ax.grid(True, alpha=0.3, which="both")
@@ -449,9 +449,20 @@ def make_plots(
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Optional: enable logging (uncomment to inspect calculation)
-    # enable_logging(level="INFO")    # key-step logs
-    # enable_logging(level="DEBUG")   # full debug logs
+    import logging as _logging
+
+    # ── Logging configuration ──────────────────────────────────────────────
+    # By default logs go to stderr.  Set LOG_FILE to a path to save them to a
+    # file instead (the file is created / appended in the same directory as
+    # this script).  Set LOG_FILE = None to keep logging on screen.
+    LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "example_01.log")
+
+    # Uncomment ONE of the lines below to enable logging:
+    # enable_logging(level=_logging.INFO)                        # INFO  → stderr
+    # enable_logging(level=_logging.DEBUG)                       # DEBUG → stderr
+    # enable_logging(level=_logging.INFO,  log_file=LOG_FILE)    # INFO  → file
+    # enable_logging(level=_logging.DEBUG, log_file=LOG_FILE)    # DEBUG → file
 
     print("CosmoTransitions — example_01_single_field_ewpt.py\n")
 

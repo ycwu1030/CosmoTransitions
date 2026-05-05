@@ -1,72 +1,50 @@
 """
-TunnelingConfig — 统一的数值参数配置对象。
+TunnelingConfig — centralized numerical configuration.
 
-封装与模型无关的数值参数，通过 ``findAllTransitions`` / ``tunnelFromPhase``
-向整个计算链传递，避免逐层手动传参。
+Holds numerical parameters that are independent of the model physics and
+are propagated through the tunneling pipeline (``findAllTransitions``,
+``tunnelFromPhase``, etc.). Use a `TunnelingConfig` instance to control
+integration tolerances, deformation settings, logging, and other runtime
+parameters without changing model code.
 
-典型用法::
+Typical usage::
 
-    from cosmoTransitions.config import TunnelingConfig
+    """
+    Configuration object for tunneling/transition searches.
 
-    # 使用深度过冷预设
-    cfg = TunnelingConfig.supercooling_preset()
-    model.findAllTransitions(tunneling_config=cfg)
+    This dataclass centralizes numerical parameters that control the
+    tunneling pipeline (phase tracing, profile finding, path deformation,
+    and nucleation searches). Populate a `TunnelingConfig` and pass it to
+    `model.findAllTransitions(tunneling_config=cfg)` to customize behavior.
 
-    # 从 TOML 文件读取
-    cfg = TunnelingConfig.from_file("scan_config.toml")  # [tunneling] 节
-"""
-
-from __future__ import annotations
-
-import logging
-import sys
-from dataclasses import dataclass, field
-from typing import Callable, Optional, Union
-
-import numpy as np
-
-logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# 核成判据函数
-# ---------------------------------------------------------------------------
-
-def fixed_140_nucl_criterion(S: float, T: float) -> float:
-    """经典硬编码判据：S3/T - 140。与原始 CosmoTransitions 默认行为完全一致。"""
-    return S / (T + 1e-100) - 140.0
-
-
-def cosmological_nucl_criterion(
+    The most relevant fields are documented near their declarations below.
+    """
         S: float,
         T: float,
         M_Pl: float = 1.22e19,
 ) -> float:
-    R"""
-    辐射主导宇宙的精确宇宙学核成判据：
+    r"""
+    Cosmological nucleation criterion for a radiation-dominated Universe:
 
     .. math::
-        \frac{S_3}{T} - 4 \ln\!\left(\frac{M_{\rm Pl}}{T}\right) = 0
+        \frac{S_3}{T} - 4 \ln\left(\frac{M_{\rm Pl}}{T}\right) = 0
 
-    其中 :math:`M_{\rm Pl} \approx 1.22 \times 10^{19}` GeV（Planck 质量，单位
-    需与 `T` 一致）。
-
-    在 T = 100 GeV 时阈值约 143（vs. 固定 140），T = 1 GeV 时约 171，
-    T = 1 MeV 时约 199。
+    where :math:`M_{\rm Pl} \approx 1.22\times10^{19}` GeV. The threshold is
+    about 143 at T=100 GeV (vs fixed 140).
 
     Parameters
     ----------
     S : float
-        Euclidean 作用量 S3（单位 GeV）。
+        Euclidean action S3 (units GeV).
     T : float
-        温度（单位 GeV）。
+        Temperature (GeV).
     M_Pl : float, optional
-        Planck 质量，默认 1.22e19 GeV。
+        Planck mass (GeV), default 1.22e19.
 
     Returns
     -------
     float
-        < 0 表示已核化；> 0 表示未核化。
+        Negative values indicate nucleation (criterion satisfied).
     """
     if T <= 0:
         return np.inf
@@ -81,54 +59,28 @@ def cosmological_nucl_criterion(
 @dataclass
 class TunnelingConfig:
     """
-    封装与模型无关的数值参数，统一传递至整个隧穿计算链。
+    Configuration object for tunneling/transition searches.
 
-    Parameters
-    ----------
-    thinCutoff : float or ``"auto"``
-        传递至 ``SingleFieldInstanton.findProfile`` 的 ``thinCutoff`` 参数。
-        ``"auto"`` 时根据薄壁比 ε 自动推导。
-    rmin : float or ``"auto"``
-        传递至 ``findProfile`` 的 ``rmin`` 参数（相对 ``rscale``）。
-        ``"auto"`` 时由 ε 自动推导。
-    xtol : float
-        ``findProfile`` 的 ``xtol``（二分精度）。
-    phitol : float
-        ``findProfile`` 的 ``phitol``（ODE 积分精度）。
-    rmax : float
-        ``findProfile`` 的 ``rmax``（最大积分半径，相对 ``rscale``）。
-    npoints : int
-        ``findProfile`` 的 ``npoints``（输出点数）。
-    T_scan_extension : bool
-        是否允许 ``tunnelFromPhase`` 向低温延伸 T 扫描区间。
-    T_scan_max_extend : int
-        最多延伸次数（每次将扫描下界 ×0.1）。
-    nuclCriterion : ``"fixed_140"`` | ``"cosmological"`` | callable
-        核成判据。``"fixed_140"`` 保持原始默认行为（S/T−140）；
-        ``"cosmological"`` 使用 4ln(M_Pl/T) 物理阈值；
-        callable 应满足 ``nuclCriterion(S, T) -> float``，< 0 代表已核化。
-    enable_profile_retry : bool
-        当 ``findProfile`` 返回 ``Rerr is not None``（步长崩溃）时，
-        是否自动用更严格的参数档位重试。
-    max_profile_retries : int
-        最多重试次数。
-    use_adaptive_grad : bool
-        是否在 ``generic_potential.gradV``/``d2V`` 中使用
-        ``helper_functions.adaptive_gradient/adaptive_hessian``。
-        （由 generic_potential 读取；保留在此供集中配置。）
+    This dataclass centralizes numerical parameters that control the
+    tunneling pipeline (phase tracing, profile finding, path deformation,
+    and nucleation searches). Populate a `TunnelingConfig` and pass it to
+    `model.findAllTransitions(tunneling_config=cfg)` to customize behavior.
 
+    The most relevant fields are documented near their declarations below.
+    """
     Notes
     -----
-    ``TunnelingConfig`` 对象作为可选参数传入 ``tunnelFromPhase``、
-    ``findAllTransitions``（transitionFinder）、以及
-    ``generic_potential.findAllTransitions``。``None`` 时内部使用
-    ``TunnelingConfig()`` 默认实例，行为与历史版本完全一致。
+    A ``TunnelingConfig`` instance may be passed optionally to
+    ``tunnelFromPhase``, ``findAllTransitions`` (transitionFinder), and
+    ``generic_potential.findAllTransitions``. If ``None`` is passed the default
+    ``TunnelingConfig()`` is used, preserving historical behavior.
 
-    向后兼容保证：``thinCutoff/rmin = "auto"`` 在厚壁势（ε≈1）下
-    推导出与原始默认值（0.01 / 1e-4）相同的参数，不改变厚壁模型结果。
+    Backwards-compatibility note: when ``thinCutoff``/``rmin`` are set to
+    "auto", the derived values for thick-wall cases (\epsilon ~ 1) match the
+    original defaults (0.01 / 1e-4), so thick-wall model results are unchanged.
     """
 
-    # findProfile 参数
+    # findProfile parameters
     thinCutoff: Union[float, str] = "auto"
     rmin: Union[float, str] = "auto"
     xtol: float = 1e-6
@@ -136,119 +88,135 @@ class TunnelingConfig:
     rmax: float = 1e4
     npoints: int = 500
 
-    # T 扫描
+    # Temperature scan
     T_scan_extension: bool = True
     T_scan_max_extend: int = 3
 
-    # 核成判据（默认 fixed_140 保持向后兼容）
+    # Nucleation criterion (default 'fixed_140' for backward compatibility)
     nuclCriterion: Union[str, Callable[[float, float], float]] = "fixed_140"
 
-    # findProfile 自适应重试
+    # findProfile adaptive retries
     enable_profile_retry: bool = True
     max_profile_retries: int = 3
 
-    # adaptive FD 开关（由 generic_potential 读取）
+    # Adaptive finite-difference switch (read by generic_potential)
     use_adaptive_grad: bool = True
 
     # --- fullTunneling / SplinePath ---
 
     V_spline_samples: Optional[int] = 100
-    """控制 ``SplinePath`` 是否对势能预采样。
+    r"""Controls whether `SplinePath` pre-samples the potential V(x).
 
-    ``100``（默认）在[φ_sym, φ_broken]上均匀取100个点，用PCHIP样条逼近V(x)。
-    对典型EW尺度模型（势垒占场值范围的较大比例）效果良好。
+    ``100`` (default): uniformly sample 100 points on [\phi_sym, \phi_broken]
+    and construct a PCHIP spline for V(x). This reduces calls to full
+    ``Vtot`` while maintaining good accuracy for typical electroweak-scale
+    models.
 
-    设为 ``None`` 时，``SplinePath.V(x)`` 直接调用 ``Vtot``，不做预采样。
-    **对极度过冷模型（Tn/Tc ≲ 0.05）必须使用 ``None``**：均匀100点的间距
-    约为 w/99，而热势垒位于 φ~Tn ≪ w/99，预采样完全错过势垒，
-    导致 ``SingleFieldInstanton`` 找不到势垒或计算出错误的作用量。
-
-    ``supercooling_preset()`` 自动将此项设为 ``None``。
+    ``None`` disables pre-sampling so that ``SplinePath.V(x)`` calls
+    ``Vtot`` directly. For extreme supercooling (T_n/T_c ≲ 0.05) pre-sampling
+    can miss a narrow thermal barrier located near \phi ~ T_n; in such
+    cases set `V_spline_samples = None`. The helper ``supercooling_preset()``
+    sets this field to ``None`` automatically.
     """
 
     maxiter_fullTunneling: int = 20
-    """``fullTunneling`` 最大外层迭代数（路径形变 + 1D隧穿交替的轮数）。
+    """Maximum outer iterations for ``fullTunneling`` (path-deform + 1D tunneling).
 
-    每次迭代依次执行：(1) 用当前路径点拟合 SplinePath，(2) 沿路径做1D隧穿，
-    (3) 用 deformPath 修正路径，(4) 检查收敛。通常10次即收敛；
-    极薄壁泡泡可能需要更多。
+    Each iteration: (1) fit a SplinePath to the current path points, (2) perform
+    a 1D tunneling along the path, (3) deform the path via ``deformPath``,
+    (4) check convergence. Typically 10 iterations suffice.
     """
 
-    # --- 路径形变（pathDeformation）---
+    # --- Path deformation (pathDeformation) ---
 
     deform_fRatioConv: float = 0.02
-    """路径形变收敛判据：路径上最大法向力 / 最大势能梯度 < 此值时停止。
+    """Convergence tolerance for path deformation: stop when
+    max(normal_force)/max(|gradV|) < deform_fRatioConv.
 
-    越小越精确但越慢。对一般FOPT取 0.02；若过冷模型作用量对路径敏感，
-    可减小至 0.005。
+    Smaller values increase path accuracy at the cost of more deformation
+    steps. Typical value for FOPTs: 0.02. Use ~0.005 for supercooling-sensitive cases.
     """
 
     deform_maxiter: int = 500
-    """``deformPath`` 最大形变步数。超过此值时打印警告并返回当前最优路径。"""
+    """Maximum deformation iterations for ``deformPath``. A warning is
+    emitted if exceeded and the current best path is returned."""
 
-    # --- tunnelFromPhase 参数 ---
+    # --- tunnelFromPhase parameters ---
 
     Ttol: float = 1e-3
-    """寻找核成温度 Tn 的温度精度（brentq 的 ``xtol``），单位与 T 一致（GeV）。
+    """Temperature tolerance for locating T_n (brentq xtol), units: GeV.
 
-    减小此值可得到更精确的 Tn，但会增加 ``_tunnelFromPhaseAtT`` 调用次数。
-    对 Tn~O(100) GeV 的典型EW模型，``1e-3`` 已足够；极度过冷模型
-    （Tn~O(1e4) GeV）可放宽至 ``1.0``。
+    Smaller values increase T_n accuracy but increase the number of
+    `_tunnelFromPhaseAtT` calls. For T_n ~ O(100) GeV, `1e-3` is sufficient;
+    for extreme cases relax to `1.0` to speed up scanning.
     """
 
     maxiter_tunnel: int = 100
-    """``tunnelFromPhase`` 中 brentq / fmin 的最大迭代数。"""
+    """Maximum iterations for brentq / fmin in ``tunnelFromPhase``."""
 
     phitol_tunnel: float = 1e-8
-    """``_tunnelFromPhaseAtT`` 中精化真空位置时的场值精度（传给 L-BFGS-B ``gtol``）。
+    """Field-value tolerance passed as L-BFGS-B `gtol` when refining the
+    vacuum location inside `_tunnelFromPhaseAtT`.
 
-    注意：这与 ``phitol``（``findProfile`` 的ODE精度）是不同的参数。
-    此值过大会导致在错误的场值处计算作用量；过小会显著增加优化迭代次数。
+    This differs from `phitol` used by the ODE solver. Too large a value
+    yields the action evaluated at an inaccurate field value; too small
+    increases optimization runtime.
     """
 
     overlapAngle: float = 45.0
-    """从假真空出发，若两个目标相的方向夹角小于此角度（度），仅对较近的那个做隧穿计算。
+    """When starting from the false vacuum, if two candidate target vacua
+    have an angular separation (in field-space) smaller than this threshold
+    (degrees), only the nearer direction is attempted for tunneling.
 
-    设为 ``0.0`` 则始终对所有可能的目标相尝试隧穿（多相方向相近时更完整但更慢）。
-    45° 是原始CosmoTransitions默认值。
+    Set to `0.0` to force attempts for all targets (more complete but slower).
+    45° is the historical default.
     """
 
-    # --- 相追踪参数（traceMultiMin / traceMinimum）---
+    # --- Phase-tracing parameters (traceMultiMin / traceMinimum) ---
 
     dtstart: float = 1e-3
-    """``traceMultiMin`` 初始温度步长，相对于 ``tHigh - tLow`` 的比值。
-
-    过大可能跳过窄相；过小增加计算量。典型值 1e-3（即全温度范围的0.1%）。
-    对温度范围跨度大（如超过3个量级）的模型，适当减小至 1e-4。
+    """Initial temperature step for `traceMultiMin`, relative to
+    (tHigh - tLow). Large values may skip narrow phases; small values
+    increase computation. Typical default: 1e-3. For very wide temperature
+    spans, consider 1e-4.
     """
 
     tjump: float = 1e-3
-    """``traceMultiMin`` 中一个相结束后、搜索下一个相时的温度跳跃，相对于
-    ``tHigh - tLow`` 的比值。
-
-    若某个中间相的温度宽度小于 ``tjump * (tHigh - tLow)``，该相可能被跳过。
-    减小此值可减少漏相风险，但会增加不必要的追踪起始点。
+    """Temperature jump used when searching for the next phase after
+    finishing one phase, relative to (tHigh - tLow). Reduce to lower the
+    chance of skipping narrow intermediate phases at the cost of more
+    starting points.
     """
 
-    # --- 日志级别 ---
+    # --- Logging level ---
 
     log_level: Optional[int] = None
-    """若不为 ``None``，在此 ``TunnelingConfig`` 实例首次使用时自动启用
-    cosmoTransitions 日志到该级别。
+    """If not ``None``, automatically enable cosmoTransitions logging at this
+    level when :meth:`apply_log_level` is called.
 
-    例如：``log_level=logging.INFO`` 等价于在代码中调用
-    ``cosmoTransitions.enable_logging(logging.INFO)``。
-    ``None`` 表示不修改任何日志配置（默认行为）。
+    Example: ``log_level=logging.INFO`` is equivalent to calling
+    ``cosmoTransitions.enable_logging(logging.INFO)``.
+    ``None`` leaves the logging configuration unchanged (default).
+    """
+
+    log_file: Optional[str] = None
+    """Optional path to a log file.  When set together with :attr:`log_level`,
+    log records are written to this file (append mode) instead of ``stderr``.
+
+    Example::
+
+        cfg = TunnelingConfig(log_level=logging.DEBUG, log_file='run.log')
+        cfg.apply_log_level()  # writes all DEBUG messages to run.log
     """
 
     def get_nucl_criterion(self) -> Callable[[float, float], float]:
-        """
-        返回核成判据 callable。
+        """Return the nucleation-criterion callable.
 
         Returns
         -------
         callable
-            签名 ``(S: float, T: float) -> float``，< 0 表示已核化。
+            A function with signature ``(S: float, T: float) -> float``; a
+            negative return value indicates nucleation.
         """
         if callable(self.nuclCriterion):
             return self.nuclCriterion
@@ -262,14 +230,11 @@ class TunnelingConfig:
         )
 
     def get_fullTunneling_kwargs(self) -> dict:
-        """返回应传给 ``pathDeformation.fullTunneling`` 的关键字参数字典。
+        """Return kwargs to pass to ``pathDeformation.fullTunneling``.
 
-        包含 ``V_spline_samples`` 和 ``maxiter``，可直接 ``**`` 解包。
-        不包含 ``deformation_deform_params``（由 :meth:`get_deform_params` 管理）。
-
-        Returns
-        -------
-        dict
+        Includes ``V_spline_samples`` and ``maxiter`` and is safe to
+        ``**``-unpack. Deformation-specific params come from
+        :meth:`get_deform_params`.
         """
         return dict(
             V_spline_samples=self.V_spline_samples,
@@ -277,27 +242,14 @@ class TunnelingConfig:
         )
 
     def get_deform_params(self) -> dict:
-        """返回应传给 ``deformPath`` 的 ``deformation_deform_params`` 字典。
-
-        Returns
-        -------
-        dict
-        """
+        """Return the deformation parameters for ``deformPath`` as a dict."""
         return dict(
             fRatioConv=self.deform_fRatioConv,
             maxiter=self.deform_maxiter,
         )
 
     def get_tunnelFromPhase_kwargs(self) -> dict:
-        """返回应传给 ``tunnelFromPhase`` 的关键字参数字典。
-
-        包含 ``Ttol``、``maxiter``、``phitol``、``overlapAngle``，
-        不包含 ``fullTunneling_params``（由 :meth:`get_fullTunneling_kwargs` 管理）。
-
-        Returns
-        -------
-        dict
-        """
+        """Return kwargs for ``tunnelFromPhase`` (Ttol, maxiter, phitol, overlapAngle)."""
         return dict(
             Ttol=self.Ttol,
             maxiter=self.maxiter_tunnel,
@@ -306,45 +258,41 @@ class TunnelingConfig:
         )
 
     def get_traceMultiMin_kwargs(self) -> dict:
-        """返回应传给 ``traceMultiMin`` 的关键字参数字典。
-
-        包含 ``dtstart``、``tjump``。
-
-        Returns
-        -------
-        dict
-        """
+        """Return kwargs for ``traceMultiMin`` (dtstart, tjump)."""
         return dict(
             dtstart=self.dtstart,
             tjump=self.tjump,
         )
 
     def apply_log_level(self) -> None:
-        """若 :attr:`log_level` 不为 ``None``，自动启用 cosmoTransitions 日志。"""
+        """Enable cosmoTransitions logging if :attr:`log_level` is not ``None``.
+
+        Writes to :attr:`log_file` when set, otherwise to ``stderr``.
+        """
         if self.log_level is not None:
-            enable_logging(self.log_level)
+            enable_logging(self.log_level, log_file=self.log_file)
 
     def get_findProfile_kwargs(self, epsilon: float | None = None) -> dict:
-        """
-        返回应传给 ``findProfile`` 的关键字参数字典。
+        """Return a kwargs dict suitable for ``findProfile``.
 
         Parameters
         ----------
         epsilon : float or None
-            薄壁比（由 ``SingleFieldInstanton._estimate_epsilon()`` 计算）。
-            若 ``thinCutoff``/``rmin`` 为 ``"auto"``，由此推导实际值。
+            Thin-wall ratio estimated by ``SingleFieldInstanton._estimate_epsilon()``.
+            When ``thinCutoff``/``rmin`` are "auto", this value is used to
+            select recommended tiers.
 
         Returns
         -------
         dict
-            包含 ``thinCutoff``、``rmin``、``xtol``、``phitol``、``rmax``、
-            ``npoints`` 的字典，可直接 ``**`` 解包传入 ``findProfile``。
+            Dict with keys ``thinCutoff``, ``rmin``, ``xtol``, ``phitol``, ``rmax``,
+            ``npoints`` that can be ``**``-unpacked into ``findProfile``.
         """
         tc = self.thinCutoff
         rm = self.rmin
         if tc == "auto" or rm == "auto":
             if epsilon is None:
-                # 无法推导，使用原始默认值
+                # Unable to derive recommended tier; fall back to original defaults
                 if tc == "auto":
                     tc = 0.01
                 if rm == "auto":
@@ -365,22 +313,24 @@ class TunnelingConfig:
         )
 
     # ------------------------------------------------------------------
-    # 预设工厂方法
+    # Preset factory methods
     # ------------------------------------------------------------------
 
     @classmethod
-    def supercooling_preset(cls) -> "TunnelingConfig":
-        """极度过冷预设（Tn/Tc ≲ 0.05）。
+        def supercooling_preset(cls) -> "TunnelingConfig":
+                """Preset tuned for extreme supercooling (T_n/T_c ≲ 0.05).
 
-        关键特性：
+                Key features:
 
-        * ``V_spline_samples=None`` — **必须**：极度过冷模型的热势垒
-          位于 φ~Tn ≪ w，均匀100点采样（间距~w/100）完全错过势垒。
-          设为 None 后 SplinePath 直接调用 Vtot 求值，势垒分辨率无限制。
-        * 严格的 ``thinCutoff=1e-4``、``rmin=1e-7``：薄壁泡泡的数值积分参数。
-        * 启用 T 扫描延伸（最多5次，每次将下界×0.1）以追踪极低 Tn。
-        * ``Ttol=1.0``：Tn 通常在 O(1e4) GeV，GeV 级精度已足够。
-        """
+                * ``V_spline_samples=None`` — required for extreme supercooling so that
+                    narrow thermal barriers near \phi ~ T_n are resolved by direct calls
+                    to ``Vtot`` rather than coarse pre-sampling.
+                * Strict integration tiers: ``thinCutoff=1e-4``, ``rmin=1e-7`` for
+                    thin-wall instantons.
+                * Enable temperature-scan extension (up to 5 extensions, each lowering
+                    the lower bound by ×0.1) to find very low T_n values.
+                * ``Ttol=1.0``: for T_n typically O(1e4) GeV, GeV-level precision is adequate.
+                """
         return cls(
             V_spline_samples=None,
             thinCutoff=1e-4,
@@ -393,22 +343,22 @@ class TunnelingConfig:
     @classmethod
     def write_default(cls, path: str = "cosmoTransitions_config.toml") -> None:
         """
-        将内置的默认配置模板写出为 TOML 文件。
+        Write the built-in default configuration template to a TOML file.
 
-        生成的文件包含所有参数的默认值和详细注释，
-        用户可将其复制后修改，再通过 :meth:`from_file` 加载。
+        The generated file contains all parameters with detailed comments.
+        Users may copy and edit it, then load with :meth:`from_file`.
 
         Parameters
         ----------
         path : str
-            输出路径，默认 ``"cosmoTransitions_config.toml"``。
+            Output path, default ``"cosmoTransitions_config.toml"``.
 
         Examples
         --------
         ::
 
-            TunnelingConfig.write_default("my_scan.toml")   # 生成模板
-            # 编辑 my_scan.toml 后：
+            TunnelingConfig.write_default("my_scan.toml")   # write template
+            # edit my_scan.toml, then:
             cfg = TunnelingConfig.from_file("my_scan.toml")
         """
         import shutil
@@ -420,12 +370,12 @@ class TunnelingConfig:
     @classmethod
     def from_file(cls, path: str) -> "TunnelingConfig":
         """
-        从 TOML 文件的 ``[tunneling]`` 节读取配置。
+        Load configuration from the ``[tunneling]`` section of a TOML file.
 
         Parameters
         ----------
         path : str
-            TOML 文件路径（例如 ``scan_config.toml``）。
+            Path to the TOML file (e.g. ``scan_config.toml``).
 
         Returns
         -------
@@ -445,13 +395,13 @@ class TunnelingConfig:
             data = tomllib.load(f)
         section = data.get("tunneling", {})
 
-        # --- 后处理特殊值 ---
-        # TOML 无 null 类型；用字符串 "none" 表示 Python None
+        # --- post-process special sentinel values ---
+        # TOML has no native null; strings like "none" are interpreted as None
         for key in ("V_spline_samples", "log_level"):
             if isinstance(section.get(key), str) and section[key].lower() == "none":
                 section[key] = None
 
-        # log_level 允许写日志级别名称，如 "INFO" → logging.INFO
+        # log_level may also be specified as a level name, e.g. "INFO" → logging.INFO
         if isinstance(section.get("log_level"), str):
             lvl = getattr(logging, section["log_level"].upper(), None)
             if lvl is None:
@@ -466,27 +416,27 @@ class TunnelingConfig:
 
 
 # ---------------------------------------------------------------------------
-# 档位映射（模块级，供 tunneling1D 使用）
+# Tier mapping (module-level, used by tunneling1D)
 # ---------------------------------------------------------------------------
 
 # (epsilon_lower_bound, thinCutoff, rmin)
-# 按 epsilon 从大到小：epsilon > 档位的下界时使用该档
+# Apply the first tier for which epsilon > epsilon_lower_bound
 _PROFILE_PARAM_TIERS: list[tuple[float, float, float]] = [
-    (0.1,   0.01,  1e-4),   # 厚壁档：ε > 0.1（原始默认行为）
-    (1e-3,  1e-3,  1e-6),   # 中档：  1e-3 < ε ≤ 0.1
-    (0.0,   1e-4,  1e-7),   # 薄壁档：ε ≤ 1e-3（对应 Main.py 参数）
+    (0.1,   0.01,  1e-4),   # thick-wall tier: ε > 0.1 (historical default)
+    (1e-3,  1e-3,  1e-6),   # middle tier: 1e-3 < ε ≤ 0.1
+    (0.0,   1e-4,  1e-7),   # thin-wall tier: ε ≤ 1e-3
 ]
 
 
 def _epsilon_to_params(epsilon: float) -> tuple[float, float]:
     """
-    根据薄壁比 ε 返回 ``(thinCutoff, rmin)`` 档位参数。
+    Return the `(thinCutoff, rmin)` tier parameters selected by the thin-wall ratio \epsilon.
 
     Parameters
     ----------
     epsilon : float
-        薄壁比，由 ``SingleFieldInstanton._estimate_epsilon()`` 计算。
-        ε = ΔV / ΔV_barrier；ε≈1 为厚壁，ε≪1 为极薄壁。
+        Thin-wall ratio estimated by ``SingleFieldInstanton._estimate_epsilon()``.
+        \epsilon = ΔV / ΔV_barrier: \epsilon ~ 1 indicates thick-wall; \epsilon ≪ 1 indicates thin-wall.
 
     Returns
     -------
@@ -495,38 +445,47 @@ def _epsilon_to_params(epsilon: float) -> tuple[float, float]:
     for eps_thresh, thinCutoff, rmin in _PROFILE_PARAM_TIERS:
         if epsilon > eps_thresh:
             return thinCutoff, rmin
-    return 1e-4, 1e-7  # 兜底（ε=0 理论情形）
+    return 1e-4, 1e-7  # fallback (theoretical epsilon=0 case)
 
 
 # ---------------------------------------------------------------------------
-# enable_logging — 包级日志启用工具
+# enable_logging — package-level logging helper
 # ---------------------------------------------------------------------------
 
 def enable_logging(
         level: int = logging.DEBUG,
         fmt: str | None = None,
         stream=None,
+        log_file: str | None = None,
 ) -> logging.Logger:
     """
-    为所有 cosmoTransitions 模块启用日志输出。
+    Enable logging for all cosmoTransitions modules.
 
-    在 ``cosmoTransitions`` 根 logger 上添加一个 ``StreamHandler``，
-    使包内所有模块的 ``logging.getLogger(__name__)`` 日志可见。
-    多次调用安全（不会重复添加相同 handler）。
+    Attaches a handler to the ``cosmoTransitions`` root logger so that every
+    module's ``logging.getLogger(__name__)`` output becomes visible.
+    Safe to call multiple times — duplicate handlers on the same target are
+    not added.
 
     Parameters
     ----------
     level : int
-        日志级别，如 ``logging.DEBUG``（默认）或 ``logging.INFO``。
+        Logging level, e.g. ``logging.DEBUG`` (default) or ``logging.INFO``.
     fmt : str or None
-        格式字符串。默认：``'[%(levelname)s %(name)s] %(message)s'``。
+        Format string.  Default: ``'[%(levelname)s %(name)s] %(message)s'``.
     stream : file-like or None
-        输出流。默认：``sys.stderr``。
+        Output stream for a ``StreamHandler``.  Default: ``sys.stderr``.
+        Ignored when *log_file* is given.
+    log_file : str or None
+        If provided, write logs to this file path instead of a stream.
+        The file is opened in append mode (``'a'``) so successive runs
+        accumulate in the same file.  The containing directory must exist.
+        When both *stream* and *log_file* are given, *log_file* takes
+        precedence.
 
     Returns
     -------
     logging.Logger
-        已配置好的 ``cosmoTransitions`` 根 logger。
+        The configured ``cosmoTransitions`` root logger.
 
     Examples
     --------
@@ -535,31 +494,48 @@ def enable_logging(
         import logging
         from cosmoTransitions import enable_logging
 
-        enable_logging()                              # DEBUG → stderr
-        enable_logging(logging.INFO)                  # INFO  → stderr
-        enable_logging(logging.DEBUG, stream=open('ct.log', 'w'))
+        enable_logging()                              # DEBUG  → stderr
+        enable_logging(logging.INFO)                  # INFO   → stderr
+        enable_logging(logging.DEBUG, log_file='ct.log')  # DEBUG → file
 
-    也可通过 ``TunnelingConfig.log_level`` 字段自动触发::
+    Can also be triggered automatically via ``TunnelingConfig``::
 
-        cfg = TunnelingConfig(log_level=logging.INFO)
-        cfg.apply_log_level()  # 等价于 enable_logging(logging.INFO)
+        cfg = TunnelingConfig(log_level=logging.INFO, log_file='run.log')
+        cfg.apply_log_level()  # equivalent to enable_logging(logging.INFO, log_file='run.log')
     """
     if fmt is None:
         fmt = '[%(levelname)s %(name)s] %(message)s'
-    target_stream = stream  # keep reference for duplicate check
+    formatter = logging.Formatter(fmt)
     pkg_logger = logging.getLogger('cosmoTransitions')
     pkg_logger.setLevel(level)
-    # Avoid adding a duplicate StreamHandler to the same stream.
-    _already_has = any(
-        isinstance(h, logging.StreamHandler)
-        and getattr(h, 'stream', None) is (
-            target_stream if target_stream is not None else sys.stderr
+
+    if log_file is not None:
+        # FileHandler — avoid attaching a second handler to the same path.
+        resolved = os.path.abspath(log_file)
+        _already_has = any(
+            isinstance(h, logging.FileHandler)
+            and os.path.abspath(h.baseFilename) == resolved
+            for h in pkg_logger.handlers
         )
-        for h in pkg_logger.handlers
-    )
-    if not _already_has:
-        handler = logging.StreamHandler(target_stream)
-        handler.setLevel(level)
-        handler.setFormatter(logging.Formatter(fmt))
-        pkg_logger.addHandler(handler)
+        if not _already_has:
+            fh = logging.FileHandler(resolved, mode='a', encoding='utf-8')
+            fh.setLevel(level)
+            fh.setFormatter(formatter)
+            pkg_logger.addHandler(fh)
+    else:
+        # StreamHandler — avoid attaching a second handler to the same stream.
+        target_stream = stream
+        _already_has = any(
+            isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)  # FileHandler is a subclass
+            and getattr(h, 'stream', None) is (
+                target_stream if target_stream is not None else sys.stderr
+            )
+            for h in pkg_logger.handlers
+        )
+        if not _already_has:
+            sh = logging.StreamHandler(target_stream)
+            sh.setLevel(level)
+            sh.setFormatter(formatter)
+            pkg_logger.addHandler(sh)
     return pkg_logger

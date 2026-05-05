@@ -433,6 +433,22 @@ def make_plots(m, TcTrans, TnTrans, save_path=None):
 # ============================================================
 
 if __name__ == "__main__":
+    import logging as _logging
+    import os as _os
+
+    # ── Logging configuration ──────────────────────────────────────────────
+    # By default logs go to stderr.  Set LOG_FILE to a path to save them to a
+    # file instead (the file is created / appended in the same directory as
+    # this script).  Set LOG_FILE = None to keep logging on screen.
+    LOG_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                             "example_02.log")
+
+    # Uncomment ONE of the lines below to enable logging:
+    # enable_logging(level=_logging.INFO)                        # INFO  → stderr
+    # enable_logging(level=_logging.DEBUG)                       # DEBUG → stderr
+    # enable_logging(level=_logging.INFO,  log_file=LOG_FILE)    # INFO  → file
+    # enable_logging(level=_logging.DEBUG, log_file=LOG_FILE)    # DEBUG → file
+
     # Full pipeline
     m, TcTrans, TnTrans = run_pipeline(verbose=True)
 
