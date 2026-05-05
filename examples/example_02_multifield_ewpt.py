@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 example_02_multifield_ewpt.py — Two-field weak FOPT + path deformation demo
 =====================================================================
 Phase E · Tier 1 — multi-field path deformation
@@ -295,7 +295,7 @@ def make_plots(m, TcTrans, TnTrans, save_path=None):
     )
     ax_phase.set_xlim(0, min(T_max_plot, 300.0))
     ax_phase.set_xlabel("T / GeV", fontsize=12)
-    ax_phase.set_ylabel("Field values $\phi$ / GeV", fontsize=12)
+    ax_phase.set_ylabel(r"Field values $\phi$ / GeV", fontsize=12)
     ax_phase.set_title(r"Phase trajectories ($\phi_1, \phi_2$ vs $T$)", fontsize=12)
     ax_phase.legend(fontsize=7, ncol=1, loc='best')
     ax_phase.grid(True, alpha=0.3)
