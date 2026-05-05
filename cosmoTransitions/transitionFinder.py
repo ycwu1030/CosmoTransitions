@@ -976,8 +976,15 @@ def tunnelFromPhase(
                     # local minimum → fmin starting near T=0 always returns
                     # action=inf.  Use a log-scan starting at 10% of Tmax_Tc,
                     # descending decade-by-decade, to find a T where criterion<0.
+                    # If the false vacuum becomes spinodally unstable (action=inf)
+                    # before a negative-criterion T is found, bisect geometrically
+                    # between the last finite-positive-criterion T and the spinodal
+                    # T to locate the nucleation temperature.
                     n_extend = tunneling_config.T_scan_max_extend
                     Tneg = None
+                    # T_last_finite_pos: last T with finite criterion > 0.
+                    # Tmax_Tc is guaranteed to have crit > 0 (established above).
+                    T_last_finite_pos = Tmax_Tc
                     for k in range(1, n_extend + 1):
                         T_try = Tmax_Tc * 10.0**(-k)
                         if T_try < Ttol:
@@ -993,12 +1000,47 @@ def tunnelFromPhase(
                         if np.isfinite(crit_try) and crit_try < 0:
                             Tneg = T_try
                             break
+                        elif np.isfinite(crit_try):
+                            # criterion > 0, false vacuum still exists
+                            T_last_finite_pos = T_try
+                        else:
+                            # action=inf: false vacuum spinodally unstable at
+                            # T_try.  Tn (if it exists) lies between
+                            # T_last_finite_pos and T_try.  Search by geometric
+                            # bisection so we don't skip the nucleation window.
+                            T_lo, T_hi = T_try, T_last_finite_pos
+                            T_brentq_pos = T_last_finite_pos
+                            for _ in range(30):
+                                if T_hi / max(T_lo, Ttol) < 1.001:
+                                    break
+                                T_mid = np.sqrt(T_lo * T_hi)
+                                if T_mid < Ttol:
+                                    break
+                                crit_mid = _tunnelFromPhaseAtT(
+                                    T_mid, phases, start_phase, V, dV,
+                                    phitol, overlapAngle, nuclCriterion,
+                                    fullTunneling_params, outdict)
+                                logger.info(
+                                    "tunnelFromPhase: T_scan_extension bisect"
+                                    " T=%.4g S3/T=%.4g", T_mid,
+                                    outdict[T_mid]['action'] / (T_mid + 1e-100))
+                                if np.isfinite(crit_mid) and crit_mid < 0:
+                                    Tneg = T_mid
+                                    T_last_finite_pos = T_brentq_pos
+                                    break
+                                elif np.isfinite(crit_mid):
+                                    T_hi = T_mid
+                                    T_brentq_pos = T_mid
+                                    T_last_finite_pos = T_mid
+                                else:
+                                    T_lo = T_mid
+                            break  # exit main extension loop after bisection
                     if Tneg is None:
                         logger.info("tunnelFromPhase: no nucleation found "
                                     "(T_scan_extension: no T with S3/T < threshold)")
                         return None
                     Tnuc = optimize.brentq(
-                        _tunnelFromPhaseAtT, Tneg, Tmax_Tc,
+                        _tunnelFromPhaseAtT, Tneg, T_last_finite_pos,
                         args=args, xtol=Ttol, maxiter=maxiter, disp=False)
                 else:
                     _Tstart = 0.5 * (Tmin + Tmax_Tc)
