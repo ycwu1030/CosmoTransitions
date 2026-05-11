@@ -959,6 +959,16 @@ def tunnelFromPhase(
             # Check the original condition: if action(Tmin)/Tmax is small enough
             # it means a sign change exists between Tmin and some interior T.
             _orig_cond = nuclCriterion(outdict[Tmin]['action'], Tmax) < 0
+            # Edge case: when Tmin=0 (e.g. CW/conformal model), the thermal
+            # barrier vanishes at T=0 so the action at T=0 is spuriously large;
+            # Tn may still exist in the interior (0, Tmax).  Force _orig_cond=True
+            # so the interior fmin scan is attempted — but only when there is
+            # actually a valid temperature range to search (Tmax_Tc > Ttol).
+            # Computing Tmax_Tc here avoids triggering fmin with a degenerate
+            # T=0 starting point when phases={} or no overlap exists.
+            Tmax_Tc = _maxTCritForPhase(phases, start_phase, V, Ttol)
+            if not _orig_cond and Tmin == 0.0 and Tmax_Tc > Ttol:
+                _orig_cond = True
             # Extended-scan fallback: when the original condition fails but
             # Tmin is near 0 (conformal-CW / zero-T quantum barrier case),
             # use fmin with a log-space initial guess to find the S3/T minimum.
@@ -970,7 +980,6 @@ def tunnelFromPhase(
             )
             if _orig_cond or _do_extended:
                 # tunneling *may* be possible. Find the minimum of S3/T.
-                Tmax_Tc = _maxTCritForPhase(phases, start_phase, V, Ttol)
                 if _do_extended:
                     # At very low T the symmetric phase may not be a stable
                     # local minimum → fmin starting near T=0 always returns
@@ -1075,6 +1084,9 @@ def tunnelFromPhase(
     logger.info("tunnelFromPhase: found Tn=%.6g, S3/T=%.4g (trantype=%d)",
                 Tnuc, rdict.get('action', float('nan')) / (Tnuc + 1e-100),
                 rdict.get('trantype', 0))
+    if 'trantype' not in rdict:
+        logger.info("tunnelFromPhase: incomplete result dict at Tnuc (no trantype), returning None")
+        return None
     rdict['betaHn_GW'] = 0.0
     if rdict['trantype'] == 1:
         outdict_tmp = {}
