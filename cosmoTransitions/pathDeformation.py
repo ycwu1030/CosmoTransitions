@@ -282,6 +282,10 @@ class Deformation_Spline:
         """Compute dphi/ds, where s is the path length instead of the path
         parameter t. This is just the direction along the path."""
         dphi_sq = np.sum(dphi*dphi, axis=-1)[:,np.newaxis]
+        # Guard against degenerate path segments (coincident nodes).
+        # Replace zero entries with a small positive value so that
+        # dphids stays finite; the force will be small there anyway.
+        dphi_sq = np.where(dphi_sq > 0, dphi_sq, 1e-30 * np.max(dphi_sq) + 1e-300)
         dphids = dphi/np.sqrt(dphi_sq)
         """Then find the acceleration along the path, i.e. d2phi/ds2:"""
         d2phids2 = (d2phi - dphi * np.sum(dphi*d2phi, axis=-1)[:,np.newaxis] /
@@ -320,6 +324,7 @@ class Deformation_Spline:
                 + (phi_fit[-1] - phi_fit[1])[np.newaxis, :])
         d2phi = np.sum(beta[np.newaxis, :, :] * d2X[:, :, np.newaxis], axis=1)
         dphi_sq = np.sum(dphi * dphi, axis=-1)[:, np.newaxis]
+        dphi_sq = np.where(dphi_sq > 0, dphi_sq, 1e-30 * np.max(dphi_sq) + 1e-300)
         dphids = dphi / np.sqrt(dphi_sq)
         d2phids2 = (d2phi
                     - dphi * np.sum(dphi * d2phi, axis=-1)[:, np.newaxis] / dphi_sq
@@ -681,6 +686,8 @@ class Deformation_Points:
         # Let `x` be some variable that parametrizes the path such that
         # |dphi/dx| = 1. Calculate the derivs.
         dphi_abssq = np.sum(dphi*dphi, axis=-1)[:,np.newaxis]
+        dphi_abssq = np.where(dphi_abssq > 0, dphi_abssq,
+                               1e-30 * np.max(dphi_abssq) + 1e-300)
         dphi /= np.sqrt(dphi_abssq)  # This is now dphi/dx
         d2phi /= dphi_abssq  # = d2phi/dx2 + (dphi/dx)(d2phi/dt2)/(dphi/dt)^2
         d2phi -= np.sum(d2phi*dphi, axis=-1)[:,np.newaxis] * dphi  # = d2phi/dx2
@@ -743,7 +750,12 @@ class Deformation_Points:
           #  phi2 += F2*(stepsize*0.5)
             DF_max = np.max(np.abs(F2-F1), axis=0)
             F_max = np.max(np.abs(F1), axis=0)
-            if (DF_max < diff_check*F_max).all():
+            # Use max(F_max, F_max_global) so that directions where the
+            # force is currently zero don't make the convergence test
+            # impossible (DF < 0 is never true).
+            F_ref = np.where(F_max > 0, F_max,
+                              np.max(np.abs(F1)) + 1e-300)
+            if (DF_max < diff_check*F_ref).all():
                 break
             stepsize /= step_decrease
         self.phi = phi2 + F2*(stepsize*0.5)
@@ -997,9 +1009,13 @@ class SplinePath:
             sol = solve_ivp(dpdx, (pdist[0], pdist[-1]), [0.],
                             t_eval=pdist, rtol=1e-10, atol=pdist[-1]*1e-8,
                             method='RK45')
-            pdist = sol.y[0]
-            self.L = pdist[-1]
-            self._path_tck = interpolate.splprep(pts.T, u=pdist, s=0, k=k)[0]
+            # Only use the refined distances if the solver reached all
+            # t_eval points.  A truncated sol.y[0] would silently produce
+            # a mis-shaped knot vector that crashes splprep downstream.
+            if sol.success and len(sol.y[0]) == len(pdist):
+                pdist = sol.y[0]
+                self.L = pdist[-1]
+                self._path_tck = interpolate.splprep(pts.T, u=pdist, s=0, k=k)[0]
         # Now make the potential spline.
         self._V = V
         self._dV = dV
@@ -1160,6 +1176,7 @@ def fullTunneling(
     pts = np.asanyarray(path_pts)
     saved_steps = []
     deformation_init_params['save_all_steps'] = save_all_steps
+    _consec_noconv = 0  # consecutive outer iterations where deformation did not converge
     for num_iter in range(1, maxiter+1):
         logger.debug("Starting tunneling step %i", num_iter)
         # 1. Fit the spline to the path.
@@ -1196,6 +1213,21 @@ def fullTunneling(
         # then assume that `path` is a good solution.
         if (converged and deform_obj.num_steps < 2):
             break
+        # Early-exit guard: if deformation fails to converge (hits its own
+        # maxiter or raises DeformationError) in two consecutive outer
+        # iterations, stop rather than silently burning through all maxiter
+        # outer loops (which would produce 20 × 500 = 10,000 inner steps and
+        # appear to the user as a hang / stuck state).
+        if not converged:
+            _consec_noconv += 1
+            if _consec_noconv >= 2:
+                logger.warning(
+                    "fullTunneling: deformation failed to converge in %d "
+                    "consecutive outer iterations; stopping early at %d/%d.",
+                    _consec_noconv, num_iter, maxiter)
+                break
+        else:
+            _consec_noconv = 0
     else:
         logger.warning("Reached maxiter in fullTunneling. No convergence.")
     # Refine the two path endpoints with L-BFGS-B so that they sit precisely
