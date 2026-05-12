@@ -395,10 +395,21 @@ class SingleFieldInstanton:
             # what we want. Just ignore the warnings.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                phi = (gamma(nu+1)*(0.5*beta_r)**-nu * iv(nu, beta_r)-1) * dV/d2V
-                dphi = -nu*((0.5*beta_r)**-nu / r) * iv(nu, beta_r)
-                dphi += (0.5*beta_r)**-nu * 0.5*beta \
-                        * (iv(nu-1, beta_r)+iv(nu+1, beta_r))
+                _pow = (0.5*beta_r)**-nu
+                _iv_nu   = iv(nu, beta_r)
+                _iv_nm1  = iv(nu-1, beta_r)
+                _iv_np1  = iv(nu+1, beta_r)
+                # When beta_r is very large iv→∞ and (0.5*beta_r)^-ν→0;
+                # 0*∞ = NaN in IEEE arithmetic, but the correct limit is +∞
+                # (exponentially growing solution → φ→∞, as desired).
+                _iv_scaled = _pow * _iv_nu
+                if np.isnan(_iv_scaled):
+                    _iv_scaled = np.inf
+                phi = (gamma(nu+1)*_iv_scaled - 1) * dV/d2V
+                dphi = -nu*(_pow / r) * _iv_nu
+                dphi += _pow * 0.5*beta * (_iv_nm1 + _iv_np1)
+                if np.isnan(dphi):
+                    dphi = np.inf
                 dphi *= gamma(nu+1) * dV/d2V
                 phi += phi0
         else:
@@ -795,7 +806,8 @@ class SingleFieldInstanton:
             # r0, phi0, dphi0 = self.initialConditions(x, rmin, thinCutoff)
             r0_, phi0, dphi0 = self.initialConditions(
                 delta_phi0, rmin, delta_phi_cutoff)
-            if not np.isfinite(r0_) or not np.isfinite(x):
+            if (not np.isfinite(r0_) or not np.isfinite(x)
+                    or not np.isfinite(phi0) or not np.isfinite(dphi0)):
                 # Use the last finite values instead
                 # (assuming there are such values)
                 assert rf is not None, "Failed to retrieve initial "\

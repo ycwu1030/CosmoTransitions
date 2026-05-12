@@ -220,7 +220,9 @@ def rkqs_pi(y, dydt, t, f, dt_try, epsfrac, epsabs, args=(), errmax_prev=None):
             raise IntegrationError("Stepsize rounds down to zero.")
 
     # PI controller (or I-only on first step)
-    if errmax_prev is not None and errmax_prev > 0:
+    # Guard: if errmax==0 (e.g. NaN→0 via nan_to_num), (1e-300)^-KI ~ 10^24
+    # which overflows in a scalar multiply.  Fall back to I-controller.
+    if errmax_prev is not None and errmax_prev > 0 and errmax > 0:
         scale = 0.9 * (errmax + 1e-300) ** -_KI * (errmax_prev + 1e-300) ** _KP
         dtnext = dt * min(scale, 5.0)
     else:
