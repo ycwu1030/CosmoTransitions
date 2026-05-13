@@ -1070,9 +1070,25 @@ def tunnelFromPhase(
                         # no tunneling possible
                         logger.info("tunnelFromPhase: no nucleation found (S/T always > threshold)")
                         return None
-                    Tnuc = optimize.brentq(
-                        _tunnelFromPhaseAtT, Tmin_opt, Tmax_Tc,
-                        args=args, xtol=Ttol, maxiter=maxiter, disp=False)
+                    # Use Tmax_Tc as upper bracket; fall back to Tmax if
+                    # criterion(Tmax_Tc) <= 0 (e.g. numerical issue near the
+                    # degenerate point where pathDeformation may report "no
+                    # barrier" and return action=0).  criterion(Tmax) > 0 is
+                    # guaranteed by the outer handler's condition check.
+                    try:
+                        Tnuc = optimize.brentq(
+                            _tunnelFromPhaseAtT, Tmin_opt, Tmax_Tc,
+                            args=args, xtol=Ttol, maxiter=maxiter, disp=False)
+                    except ValueError as _brentq_err:
+                        if _brentq_err.args[0] != "f(a) and f(b) must have different signs":
+                            raise
+                        logger.info(
+                            "tunnelFromPhase: brentq(Tmin_opt=%.4g, Tmax_Tc=%.4g) "
+                            "failed (same sign); retrying with upper=Tmax=%.4g",
+                            Tmin_opt, Tmax_Tc, Tmax)
+                        Tnuc = optimize.brentq(
+                            _tunnelFromPhaseAtT, Tmin_opt, Tmax,
+                            args=args, xtol=Ttol, maxiter=maxiter, disp=False)
             else:
                 # no tunneling possible
                 logger.info("tunnelFromPhase: no nucleation found (S/T < threshold at all T)")
