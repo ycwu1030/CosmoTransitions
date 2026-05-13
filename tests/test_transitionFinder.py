@@ -202,3 +202,128 @@ class TestModel1TcTransitions:
         for tr in model1_tc_transitions:
             assert len(tr["low_vev"]) == 2
             assert len(tr["high_vev"]) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. findAllTransitions — normal supercooled single-field model
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.slow
+class TestFindAllTransitionsNormal:
+    """
+    findAllTransitions on SupercooledSingleField (example_03):
+      D=0.10, E=0.09, T0=50 GeV, lam=0.10  →  Tn/Tc ≈ 0.74.
+
+    The symmetric phase exists only for T > T0 (spinodal), so Tmin > 0 and the
+    primary brentq([Tmin, Tmax]) finds the sign change directly — no fallback
+    code is needed.  These tests lock the happy-path behaviour.
+    """
+
+    def test_returns_list(self, supercooled_transitions):
+        assert isinstance(supercooled_transitions, list)
+
+    def test_exactly_one_first_order_transition(self, supercooled_transitions):
+        first_order = [t for t in supercooled_transitions if t["trantype"] == 1]
+        assert len(first_order) == 1
+
+    def test_required_keys_present(self, supercooled_transitions):
+        """generic_potential.findAllTransitions must attach all expected keys."""
+        required = ("Tnuc", "low_vev", "high_vev", "action", "trantype",
+                    "alpha_GW", "betaHn_GW", "crit_trans")
+        t = next(tr for tr in supercooled_transitions if tr["trantype"] == 1)
+        for key in required:
+            assert key in t, f"Transition dict missing key '{key}'"
+
+    def test_Tn_below_Tc(self, supercooled_model, supercooled_transitions):
+        """Nucleation temperature must be below the critical temperature."""
+        Tc_list = supercooled_model.calcTcTrans()
+        assert len(Tc_list) >= 1
+        Tc = Tc_list[0]["Tcrit"]
+        Tn = next(t["Tnuc"] for t in supercooled_transitions if t["trantype"] == 1)
+        assert Tn < Tc
+
+    def test_Tn_above_spinodal(self, supercooled_model, supercooled_transitions):
+        """Nucleation must occur above T0 (spinodal) where the false vacuum exists."""
+        Tn = next(t["Tnuc"] for t in supercooled_transitions if t["trantype"] == 1)
+        assert Tn > supercooled_model.T0
+
+    def test_alpha_GW_positive(self, supercooled_transitions):
+        t = next(tr for tr in supercooled_transitions if tr["trantype"] == 1)
+        assert t["alpha_GW"] > 0
+
+    def test_high_vev_near_zero(self, supercooled_transitions):
+        """The false-vacuum (high-T) vev must be close to the origin."""
+        t = next(tr for tr in supercooled_transitions if tr["trantype"] == 1)
+        assert abs(t["high_vev"][0]) < 5.0   # phi_v ≈ 158 GeV → origin is < 5 GeV
+
+    def test_low_vev_large(self, supercooled_transitions):
+        """The true-vacuum (low-T) vev must be well away from the origin."""
+        t = next(tr for tr in supercooled_transitions if tr["trantype"] == 1)
+        assert abs(t["low_vev"][0]) > 50.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. findAllTransitions — conformal/CW model (Tmin = 0 fallback path)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.slow
+class TestConformalFallback:
+    """
+    findAllTransitions on xSMZ2_Conformal(vs=100, MS=491.08, kappaS=0.724).
+
+    In this model the singlet-symmetric phase (h=0, S=vs) is traced all the
+    way to T=0 (Tmin=0).  The primary brentq([0, Tmax]) fails because the
+    action at T=0 is spuriously large (no thermal barrier in the conformal
+    potential at T→0).  The function must fall back to an interior scan to
+    locate a bracket where the nucleation criterion changes sign.
+
+    Regression tests for two distinct bugs:
+
+    Bug 1 — _orig_cond computed with mixed arguments:
+        nuclCriterion(action(Tmin), Tmax) evaluated action(0)/Tmax rather than
+        action(0)/0, giving the wrong sign determination.  Fixed by the
+        Tmin==0.0 guard that forces _orig_cond=True.
+
+    Bug 2 — unguarded inner brentq([Tmin_opt, Tmax_Tc]):
+        Near the critical temperature pathDeformation returns action=0 ("no
+        barrier"), so criterion(Tmax_Tc) ≤ 0.  With both endpoints negative the
+        inner brentq raised ValueError which propagated uncaught.  Fixed (and
+        later superseded by the unified log-space scan) by the retry with Tmax.
+    """
+
+    def test_does_not_raise(self, conformal_xSM_transitions):
+        """
+        If the fixture succeeded, findAllTransitions() did not raise.
+        Before Bug 2 was fixed this test would ERROR with ValueError.
+        """
+        assert conformal_xSM_transitions is not None
+
+    def test_returns_list(self, conformal_xSM_transitions):
+        assert isinstance(conformal_xSM_transitions, list)
+
+    def test_first_order_transition_found(self, conformal_xSM_transitions):
+        """At least one first-order nucleation transition must be found."""
+        first_order = [t for t in conformal_xSM_transitions if t["trantype"] == 1]
+        assert len(first_order) >= 1
+
+    def test_Tn_positive(self, conformal_xSM_transitions):
+        t = next(tr for tr in conformal_xSM_transitions if tr["trantype"] == 1)
+        assert t["Tnuc"] > 0.0
+
+    def test_Tn_below_Tc(self, conformal_xSM_instance, conformal_xSM_transitions):
+        """Nucleation temperature must be below the critical temperature."""
+        Tc_list = conformal_xSM_instance.calcTcTrans()
+        if not Tc_list:
+            pytest.skip("No critical temperature found")
+        Tc = max(t["Tcrit"] for t in Tc_list)
+        Tn = next(tr["Tnuc"] for tr in conformal_xSM_transitions if tr["trantype"] == 1)
+        assert Tn < Tc
+
+    def test_crit_trans_key_present(self, conformal_xSM_transitions):
+        """generic_potential must attach the 'crit_trans' key to every transition."""
+        for t in conformal_xSM_transitions:
+            assert "crit_trans" in t
+
+    def test_alpha_GW_positive(self, conformal_xSM_transitions):
+        t = next(tr for tr in conformal_xSM_transitions if tr["trantype"] == 1)
+        assert t["alpha_GW"] > 0

@@ -119,3 +119,104 @@ def full_tunneling_potential():
     """
     from examples.fullTunneling import Potential
     return Potential(c=5., fx=10., fy=10.)
+
+
+# ── findAllTransitions fixtures ───────────────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def supercooled_model():
+    """
+    SupercooledSingleField from example_03 with default parameters
+    (D=0.10, E=0.09, T0=50, lam=0.10).  Tn/Tc ≈ 0.74 (26% supercooling).
+    Exercises the happy path: primary brentq([Tmin, Tmax]) finds a sign change
+    directly and returns Tnuc without any fallback.
+    """
+    from examples.example_03_supercooled_ewpt import SupercooledSingleField
+    return SupercooledSingleField()
+
+
+@pytest.fixture(scope="session")
+def supercooled_transitions(supercooled_model):
+    """findAllTransitions() for the supercooled model, session-cached."""
+    return supercooled_model.findAllTransitions()
+
+
+@pytest.fixture(scope="session")
+def conformal_xSM_instance():
+    """
+    xSMZ2_Conformal model (Z2-symmetric conformal singlet-SM extension) with
+    vs=100, MS=491.081377, kappaS=0.724345.
+
+    In this model the symmetric phase (h=0, S=vs) traces all the way to T=0
+    (Tmin=0), so the primary brentq([0, Tmax]) fails because the action at T=0
+    is spuriously large (no thermal barrier at T=0 for a conformal potential).
+    This exercises the fallback path in tunnelFromPhase.
+
+    Regression fixture for the crash:
+        'f(a) and f(b) must have different signs'
+    that previously propagated from an unguarded inner brentq([Tmin_opt, Tmax_Tc]).
+    """
+    from cosmoTransitions import generic_potential
+
+    _MHL = 125.09
+    _GF = 1.1663787e-5
+    _MT = 173.5
+    _VEV = (np.sqrt(2) * _GF) ** (-0.5)
+    _GWEAK = 0.65742
+    _GHYPER = 0.34123
+    _YT = np.sqrt(2) * _MT / _VEV
+
+    class xSMZ2_Conformal(generic_potential.generic_potential):
+        def init(self, vs, MS, kappaS):
+            self.Ndim = 2
+            self.renormScaleSq = _VEV ** 2
+            self.kappaH = _MHL ** 2 / _VEV ** 2
+            self.kappaS = kappaS
+            self.lamSH = 2 * MS ** 2 / _VEV ** 2
+            self.wh0 = _VEV
+            self.ws0 = vs
+            self.ch = (self.lamSH / 12.0
+                       + (3.0 * _GWEAK ** 2 + _GHYPER ** 2) / 16.0
+                       + _YT ** 2 / 4.0)
+            self.cs = self.lamSH / 12.0
+
+        def forbidPhaseCrit(self, X):
+            X = np.asanyarray(X)
+            return (X[..., 0] < -5.0).any() or (X[..., 1] < -5.0).any()
+
+        def V0(self, X):
+            X = np.asanyarray(X)
+            h, s = X[..., 0], X[..., 1]
+            r = (self.kappaH / 4.0 * h ** 4
+                 * (np.log(h ** 2 / self.wh0 ** 2 + 1e-10) / 2.0 - 0.25))
+            r += (self.kappaS / 4.0 * s ** 4
+                  * (np.log(s ** 2 / self.ws0 ** 2 + 1e-10) / 2.0 - 0.25))
+            r += self.lamSH / 4.0 * h ** 2 * s ** 2
+            return r
+
+        def V1T_from_X(self, X, T, include_radiation=True):
+            T = np.asanyarray(T)
+            X = np.asanyarray(X)
+            h, s = X[..., 0], X[..., 1]
+            return (self.ch / 2.0 * T ** 2 * h ** 2
+                    + self.cs / 2.0 * T ** 2 * s ** 2)
+
+        def Vtot(self, X, T, include_radiation=True):
+            return self.V0(X) + self.V1T_from_X(X, T)
+
+        def approxZeroTMin(self):
+            return [np.array([0.0, self.ws0]), np.array([self.wh0, 0.0])]
+
+    return xSMZ2_Conformal(100, 491.081377, 0.724345)
+
+
+@pytest.fixture(scope="session")
+def conformal_xSM_transitions(conformal_xSM_instance):
+    """
+    findAllTransitions() for the conformal xSM model, session-cached.
+
+    If findAllTransitions() raises, the fixture itself errors out and every
+    test that depends on it is marked ERROR — which is the intended signal for
+    the regression case before the fix is applied.
+    """
+    return conformal_xSM_instance.findAllTransitions()

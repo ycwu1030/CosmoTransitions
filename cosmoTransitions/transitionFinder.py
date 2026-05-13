@@ -955,144 +955,85 @@ def tunnelFromPhase(
         if err.args[0] != "f(a) and f(b) must have different signs":
             raise
         if nuclCriterion(outdict[Tmax]['action'], Tmax) > 0:
-            # brentq failed: criterion > 0 at both endpoints (both > threshold).
-            # Check the original condition: if action(Tmin)/Tmax is small enough
-            # it means a sign change exists between Tmin and some interior T.
-            _orig_cond = nuclCriterion(outdict[Tmin]['action'], Tmax) < 0
-            # Edge case: when Tmin=0 (e.g. CW/conformal model), the thermal
-            # barrier vanishes at T=0 so the action at T=0 is spuriously large;
-            # Tn may still exist in the interior (0, Tmax).  Force _orig_cond=True
-            # so the interior fmin scan is attempted — but only when there is
-            # actually a valid temperature range to search (Tmax_Tc > Ttol).
-            # Computing Tmax_Tc here avoids triggering fmin with a degenerate
-            # T=0 starting point when phases={} or no overlap exists.
+            # brentq failed with criterion > 0 at both endpoints.  This is the
+            # typical situation for conformal/CW models where the symmetric phase
+            # extends to T=0: the action at T=Tmin≈0 is spuriously large (no
+            # thermal barrier at T=0), so both endpoints are positive and brentq
+            # cannot locate the root directly.
+            #
+            # Strategy: compute Tmax_Tc (the highest T at which the start phase
+            # is degenerate with another phase) and perform a downward log-space
+            # scan from just below Tmax_Tc toward max(Tmin, Ttol).  Track the
+            # latest T with criterion > 0 (T_lo, the upper bracket) and the
+            # first T with criterion ≤ 0 (T_neg, the lower bracket).  Once a
+            # bracket is found, brentq locates Tnuc precisely.
+            #
+            # Upper-bracket fallback: when the first scan point already has
+            # criterion ≤ 0 (action ≈ 0 near the degenerate point, which
+            # pathDeformation reports as "no barrier"), T_lo is never set during
+            # the scan.  In that case Tmax is used as the upper bracket because
+            # criterion(Tmax) > 0 is guaranteed by the outer condition.
             Tmax_Tc = _maxTCritForPhase(phases, start_phase, V, Ttol)
-            if not _orig_cond and Tmin == 0.0 and Tmax_Tc > Ttol:
-                _orig_cond = True
-            # Extended-scan fallback: when the original condition fails but
-            # Tmin is near 0 (conformal-CW / zero-T quantum barrier case),
-            # use fmin with a log-space initial guess to find the S3/T minimum.
-            _do_extended = (
-                not _orig_cond
-                and tunneling_config is not None
-                and tunneling_config.T_scan_extension
-                and Tmin < 1e-4 * Tmax
-            )
-            if _orig_cond or _do_extended:
-                # tunneling *may* be possible. Find the minimum of S3/T.
-                if _do_extended:
-                    # At very low T the symmetric phase may not be a stable
-                    # local minimum → fmin starting near T=0 always returns
-                    # action=inf.  Use a log-scan starting at 10% of Tmax_Tc,
-                    # descending decade-by-decade, to find a T where criterion<0.
-                    # If the false vacuum becomes spinodally unstable (action=inf)
-                    # before a negative-criterion T is found, bisect geometrically
-                    # between the last finite-positive-criterion T and the spinodal
-                    # T to locate the nucleation temperature.
-                    n_extend = tunneling_config.T_scan_max_extend
-                    Tneg = None
-                    # T_last_finite_pos: last T with finite criterion > 0.
-                    # Tmax_Tc is guaranteed to have crit > 0 (established above).
-                    T_last_finite_pos = Tmax_Tc
-                    for k in range(1, n_extend + 1):
-                        T_try = Tmax_Tc * 10.0**(-k)
-                        if T_try < Ttol:
-                            break
-                        crit_try = _tunnelFromPhaseAtT(
-                            T_try, phases, start_phase, V, dV,
-                            phitol, overlapAngle, nuclCriterion,
-                            fullTunneling_params, outdict)
-                        logger.info(
-                            "tunnelFromPhase: T_scan_extension k=%d T=%.4g "
-                            "S3/T=%.4g", k, T_try,
-                            outdict[T_try]['action'] / (T_try + 1e-100))
-                        if np.isfinite(crit_try) and crit_try < 0:
-                            Tneg = T_try
-                            break
-                        elif np.isfinite(crit_try):
-                            # criterion > 0, false vacuum still exists
-                            T_last_finite_pos = T_try
-                        else:
-                            # action=inf: false vacuum spinodally unstable at
-                            # T_try.  Tn (if it exists) lies between
-                            # T_last_finite_pos and T_try.  Search by geometric
-                            # bisection so we don't skip the nucleation window.
-                            T_lo, T_hi = T_try, T_last_finite_pos
-                            T_brentq_pos = T_last_finite_pos
-                            for _ in range(30):
-                                if T_hi / max(T_lo, Ttol) < 1.001:
-                                    break
-                                T_mid = np.sqrt(T_lo * T_hi)
-                                if T_mid < Ttol:
-                                    break
-                                crit_mid = _tunnelFromPhaseAtT(
-                                    T_mid, phases, start_phase, V, dV,
-                                    phitol, overlapAngle, nuclCriterion,
-                                    fullTunneling_params, outdict)
-                                logger.info(
-                                    "tunnelFromPhase: T_scan_extension bisect"
-                                    " T=%.4g S3/T=%.4g", T_mid,
-                                    outdict[T_mid]['action'] / (T_mid + 1e-100))
-                                if np.isfinite(crit_mid) and crit_mid < 0:
-                                    Tneg = T_mid
-                                    T_last_finite_pos = T_brentq_pos
-                                    break
-                                elif np.isfinite(crit_mid):
-                                    T_hi = T_mid
-                                    T_brentq_pos = T_mid
-                                    T_last_finite_pos = T_mid
-                                else:
-                                    T_lo = T_mid
-                            break  # exit main extension loop after bisection
-                    if Tneg is None:
-                        logger.info("tunnelFromPhase: no nucleation found "
-                                    "(T_scan_extension: no T with S3/T < threshold)")
-                        return None
-                    Tnuc = optimize.brentq(
-                        _tunnelFromPhaseAtT, Tneg, T_last_finite_pos,
-                        args=args, xtol=Ttol, maxiter=maxiter, disp=False)
-                else:
-                    _Tstart = 0.5 * (Tmin + Tmax_Tc)
-
-                    def abort_fmin(T, outdict=outdict, nc=nuclCriterion):
-                        T = T[0]  # T is an array of size 1
-                        if nc(outdict[T]['action'], T) <= 0:
-                            raise StopIteration(T)
-
-                    try:
-                        Tmin_opt = optimize.fmin(_tunnelFromPhaseAtT, _Tstart,
-                                                 args=args, xtol=Ttol*10,
-                                                 ftol=1.0, maxiter=maxiter,
-                                                 disp=0, callback=abort_fmin)[0]
-                    except StopIteration as se:
-                        Tmin_opt = se.args[0]
-                    if nuclCriterion(outdict[Tmin_opt]['action'], Tmin_opt) > 0:
-                        # no tunneling possible
-                        logger.info("tunnelFromPhase: no nucleation found (S/T always > threshold)")
-                        return None
-                    # Use Tmax_Tc as upper bracket; fall back to Tmax if
-                    # criterion(Tmax_Tc) <= 0 (e.g. numerical issue near the
-                    # degenerate point where pathDeformation may report "no
-                    # barrier" and return action=0).  criterion(Tmax) > 0 is
-                    # guaranteed by the outer handler's condition check.
-                    try:
-                        Tnuc = optimize.brentq(
-                            _tunnelFromPhaseAtT, Tmin_opt, Tmax_Tc,
-                            args=args, xtol=Ttol, maxiter=maxiter, disp=False)
-                    except ValueError as _brentq_err:
-                        if _brentq_err.args[0] != "f(a) and f(b) must have different signs":
-                            raise
-                        logger.info(
-                            "tunnelFromPhase: brentq(Tmin_opt=%.4g, Tmax_Tc=%.4g) "
-                            "failed (same sign); retrying with upper=Tmax=%.4g",
-                            Tmin_opt, Tmax_Tc, Tmax)
-                        Tnuc = optimize.brentq(
-                            _tunnelFromPhaseAtT, Tmin_opt, Tmax,
-                            args=args, xtol=Ttol, maxiter=maxiter, disp=False)
-            else:
-                # no tunneling possible
-                logger.info("tunnelFromPhase: no nucleation found (S/T < threshold at all T)")
+            T_low_bound = max(Tmin, Ttol)
+            # Start just below Tc to avoid the degenerate point where
+            # pathDeformation may return action = 0 ("no barrier").
+            T_high_bound = Tmax_Tc * (1.0 - 1e-4)
+            if T_high_bound <= T_low_bound:
+                logger.info("tunnelFromPhase: no nucleation found "
+                            "(Tmax_Tc=%.4g ≤ Ttol=%.4g)", Tmax_Tc, Ttol)
                 return None
+            n_scan = 40
+            T_scan_arr = np.exp(np.linspace(
+                np.log(T_high_bound), np.log(T_low_bound), n_scan))
+            T_lo = None   # upper bracket (criterion > 0)
+            T_neg = None  # lower bracket (criterion ≤ 0)
+            for T_k in T_scan_arr:
+                crit_k = _tunnelFromPhaseAtT(T_k, *args)
+                logger.info("tunnelFromPhase: fallback scan T=%.4g S3/T=%.4g",
+                            T_k, outdict[T_k]['action'] / (T_k + 1e-100))
+                if not np.isfinite(crit_k):
+                    # False vacuum is spinodally unstable at T_k.  Tn (if it
+                    # exists) lies in (T_k, T_lo).  Bisect geometrically to
+                    # locate a T with criterion < 0 inside that window.
+                    if T_lo is None:
+                        break  # no positive-criterion T found; no bracket
+                    T_bslo, T_bshi = T_k, T_lo
+                    for _ in range(30):
+                        T_mid = np.sqrt(T_bslo * T_bshi)
+                        if T_mid < Ttol or T_bshi / max(T_bslo, Ttol) < 1.001:
+                            break
+                        crit_mid = _tunnelFromPhaseAtT(T_mid, *args)
+                        logger.info(
+                            "tunnelFromPhase: spinodal bisect T=%.4g S3/T=%.4g",
+                            T_mid, outdict[T_mid]['action'] / (T_mid + 1e-100))
+                        if not np.isfinite(crit_mid):
+                            T_bslo = T_mid
+                        elif crit_mid < 0:
+                            T_neg = T_mid
+                            T_lo = T_bshi
+                            break
+                        else:
+                            T_bshi = T_mid
+                            T_lo = T_mid
+                    break  # cannot probe below the spinodal
+                elif crit_k < 0:
+                    T_neg = T_k
+                    break  # bracket complete; T_lo is already set
+                else:
+                    T_lo = T_k  # positive criterion — update upper bracket
+            if T_neg is None:
+                logger.info(
+                    "tunnelFromPhase: no nucleation found "
+                    "(S3/T > threshold throughout [%.4g, %.4g])",
+                    T_low_bound, T_high_bound)
+                return None
+            # T_lo from the scan has criterion > 0 by construction; when it is
+            # None (criterion ≤ 0 at the very first scan point, i.e. Tn ≈ Tc),
+            # fall back to Tmax where criterion > 0 is guaranteed.
+            T_bracket_hi = T_lo if T_lo is not None else Tmax
+            Tnuc = optimize.brentq(
+                _tunnelFromPhaseAtT, T_neg, T_bracket_hi,
+                args=args, xtol=Ttol, maxiter=maxiter, disp=False)
         else:
             # tunneling happens right away at Tmax
             Tnuc = Tmax
