@@ -35,7 +35,7 @@ from collections import namedtuple
 from collections.abc import Callable
 from typing import Any
 
-from scipy.integrate import cumulative_trapezoid, solve_ivp
+from scipy.integrate import cumulative_trapezoid
 
 from . import tunneling1D
 from . import helper_functions
@@ -1003,24 +1003,31 @@ class SplinePath:
         self._path_tck = interpolate.splprep(pts.T, u=pdist, s=0, k=k)[0]
         # 4. Re-evaluate the distance to each point.
         if reeval_distances:
-            def dpdx(t, y):
-                dp = np.array(interpolate.splev(t, self._path_tck, der=1))
-                return [np.sqrt(np.sum(dp*dp))]
-            sol = solve_ivp(dpdx, (pdist[0], pdist[-1]), [0.],
-                            t_eval=pdist, rtol=1e-10, atol=pdist[-1]*1e-8,
-                            method='RK45')
-            # Only use the refined distances if the solver reached all
-            # t_eval points.  A truncated sol.y[0] would silently produce
-            # a mis-shaped knot vector that crashes splprep downstream.
-            if sol.success and len(sol.y[0]) == len(pdist):
-                pdist = sol.y[0]
+            # Use a fixed-step trapezoidal quadrature to re-evaluate arc-length
+            # distances.  This is robust against pathological splines (e.g. after
+            # failed path deformation) where an adaptive ODE solver can take near-
+            # infinite tiny steps trying to resolve high-frequency oscillations.
+            _n_quad = max(10 * len(pdist), 1000)
+            _t_quad = np.linspace(pdist[0], pdist[-1], _n_quad)
+            _dp_quad = np.array(interpolate.splev(_t_quad, self._path_tck, der=1))
+            _speed = np.sqrt(np.sum(_dp_quad**2, axis=0))
+            _arc = cumulative_trapezoid(_speed, _t_quad, initial=0.0)
+            _arc_at_knots = np.interp(pdist, _t_quad, _arc)
+            # Only use the refined distances if they are finite, monotone, and do
+            # not change the total path length by more than a factor of 3 (a
+            # large change signals spline oscillations on a badly-deformed path).
+            _L_orig = self.L
+            if (np.isfinite(_arc_at_knots[-1])
+                    and 0 < _arc_at_knots[-1] <= 3 * _L_orig
+                    and np.all(np.diff(_arc_at_knots) >= 0)):
+                pdist = _arc_at_knots
                 self.L = pdist[-1]
                 self._path_tck = interpolate.splprep(pts.T, u=pdist, s=0, k=k)[0]
         # Now make the potential spline.
         self._V = V
         self._dV = dV
         self._V_pchip = None
-        if V_spline_samples is not None:
+        if V_spline_samples is not None and self.L > 0:
             x = np.linspace(0,self.L,V_spline_samples)
             # extend 20% beyond this so that we more accurately model the
             # path end points

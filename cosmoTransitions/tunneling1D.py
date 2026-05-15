@@ -267,6 +267,12 @@ class SingleFieldInstanton:
         phi_tol = abs(self.phi_bar - self.phi_metaMin) * 1e-6
         x1 = min(self.phi_bar, self.phi_metaMin)
         x2 = max(self.phi_bar, self.phi_metaMin)
+        if not (np.isfinite(x1) and np.isfinite(x2) and x2 > x1):
+            raise PotentialError(
+                "Barrier bounds are degenerate or non-finite "
+                "(phi_bar=%.6g, phi_metaMin=%.6g); no barrier." %
+                (self.phi_bar, self.phi_metaMin),
+                "no barrier")
         phi_bar_top = optimize.fminbound(
             lambda x: -self.V(x), x1, x2, xtol=phi_tol)
         if phi_bar_top + phi_tol > x2 or phi_bar_top - phi_tol < x1:
