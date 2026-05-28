@@ -7,7 +7,7 @@ from a simple weak first-order phase transition to advanced usage patterns
 Each script can be run directly from the repository root:
 
 ```bash
-python examples/example_XX_....py
+python examples/detailed/example_XX_....py
 ```
 
 ---
