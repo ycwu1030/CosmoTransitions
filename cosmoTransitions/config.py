@@ -21,6 +21,8 @@ from typing import Callable, Optional, Union
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 
 def fixed_140_nucl_criterion(S: float, T: float) -> float:
     """Nucleation criterion with a fixed threshold of 140.
