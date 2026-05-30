@@ -400,17 +400,35 @@ def traceMultiMin(
                 t1 > max(phase.T[0], phase.T[-1])):
                 continue
             x = fmin(phase.valAt(t1), t1)
-            # Guard: if x1 is very near the field origin (|x1| < deltaX_target),
-            # it may be the symmetric phase starting point — never mark it as
-            # "already covered" by a broken phase far from zero (Issue #1).
-            if np.max(np.abs(x1)) < deltaX_target:
-                continue  # always trace points that are at/near φ = 0
             if np.sum((x-x1)**2)**.5 < 2*deltaX_target:
-                # The point is already covered
-                # Skip this phase and change the linkage.
-                if linkedFrom != i and linkedFrom is not None:
-                    phase.addLinkFrom(phases[linkedFrom])
-                break
+                # Field positions are close; use a midpoint barrier test to
+                # decide whether x1 and x lie in the same potential basin.
+                #
+                # Criterion: V(midpoint) ≤ max(V(x1), V(x)) means no local
+                # barrier separates the two points (for a convex basin the
+                # midpoint is always below or equal to the higher endpoint).
+                # This is fully shift-invariant — only differences of V
+                # enter, never its absolute level, so a field-independent
+                # constant added to the potential has no effect.
+                #
+                # Noise tolerance covers two sources:
+                #   (1) Natural energy spread between two fmin results in the
+                #       same basin: |V_x1 − V_x|.
+                #   (2) Floating-point evaluation noise when V is large due
+                #       to a constant shift: ~1e-10 × Σ|V|, which is
+                #       O(1e6 × machine-ε) and well above cancellation error
+                #       while still negligible compared to any physically
+                #       meaningful barrier.
+                V_x1  = float(np.ravel(f(x1,           t1))[0])
+                V_x   = float(np.ravel(f(x,            t1))[0])
+                V_mid = float(np.ravel(f(0.5*(x1 + x), t1))[0])
+                noise = (abs(V_x1 - V_x)
+                         + 1e-10 * (abs(V_x1) + abs(V_x) + abs(V_mid)))
+                if V_mid - max(V_x1, V_x) <= noise:
+                    # No barrier: same basin → already covered.
+                    if linkedFrom != i and linkedFrom is not None:
+                        phase.addLinkFrom(phases[linkedFrom])
+                    break
         else:
             # The point is not already covered. Trace the phase.
             # print("Tracing phase starting at x =", x1, "; t =", t1)
