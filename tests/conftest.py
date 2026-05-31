@@ -220,3 +220,100 @@ def conformal_xSM_transitions(conformal_xSM_instance):
     the regression case before the fix is applied.
     """
     return conformal_xSM_instance.findAllTransitions()
+
+
+@pytest.fixture(scope="session")
+def xSM_low_lamS_instance():
+    """
+    xSM (no Z2) model with parameters (MS=21.09, λS=4.65e-3, λSH=2.89e-2,
+    b3/v=0.364) that originally caused the phase-explosion bug in
+    traceMultiMin.
+
+    Before the midpoint-barrier-test fix, coverage detection in traceMultiMin
+    would fail to deduplicate near-origin seeds for small-λS models.  The
+    flat singlet direction (tiny λS) causes fmin to converge to slightly
+    different field-space points depending on the seed, each of which passed
+    the old |x1| < deltaX_target size guard but not the energy guard.  The
+    result was 34+ spurious phases instead of the correct 4.
+
+    After the fix, the midpoint barrier test detects that V(mid) ≈ max(V_x1,
+    V_x) for any two near-origin points in the same flat basin (no barrier),
+    and correctly suppresses the duplicate traces.
+    """
+    from cosmoTransitions import generic_potential
+
+    # SM / EW constants — taken directly from xSMnoZ2_test.py
+    _ALPHAREV = 137.0
+    _MHL = 125.09
+    _MZ  = 91.1876
+    _GF  = 1.1663787e-5
+    _MT  = 173.5
+    _ALP = 1.0 / _ALPHAREV
+    _EL  = np.sqrt(4.0 * np.pi * _ALP)
+    _VEV = (np.sqrt(2) * _GF) ** (-0.5)
+    _AA  = np.sqrt(np.pi * _ALP) * _VEV
+    _THETAW = np.arcsin(2.0 * _AA / _MZ) / 2.0
+    _SW = np.sin(_THETAW)
+    _CW = np.cos(_THETAW)
+    _GWEAK  = _EL / _SW
+    _GHYPER = _EL / _CW
+    _YT = np.sqrt(2) * _MT / _VEV
+
+    class xSMnoZ2(generic_potential.generic_potential):
+        """xSM singlet extension without Z2 symmetry (cubic b3 term)."""
+
+        def init(self, MS, lamS, lamSH, b3overVEV):
+            self.Ndim = 2
+            self.renormScaleSq = _VEV ** 2
+            self.muH2   = -_MHL ** 2 / 2.0
+            self.muS2   = MS ** 2 - lamSH * _VEV ** 2
+            self.lamH   = _MHL ** 2 / 2.0 / _VEV ** 2
+            self.lamS   = lamS
+            self.lamSH  = lamSH
+            self.b3     = b3overVEV * _VEV
+            self.ch = (self.lamH / 2.0
+                       + self.lamSH / 12.0
+                       + (3.0 * _GWEAK ** 2 + _GHYPER ** 2) / 16.0
+                       + _YT ** 2 / 4.0)
+            self.cs = self.lamS / 4.0 + self.lamSH / 3.0
+
+        def forbidPhaseCrit(self, X):
+            X = np.asanyarray(X)
+            return (X[..., 0] < -5.0).any()
+
+        def V0(self, X):
+            X = np.asanyarray(X)
+            h, s = X[..., 0], X[..., 1]
+            return (self.muH2 / 2.0 * h ** 2
+                    + self.muS2 / 2.0 * s ** 2
+                    + self.b3 / 3.0 * s ** 3
+                    + self.lamH / 4.0 * h ** 4
+                    + self.lamS / 4.0 * s ** 4
+                    + self.lamSH / 2.0 * h ** 2 * s ** 2)
+
+        def V1T_from_X(self, X, T, include_radiation=True):
+            T = np.asanyarray(T)
+            X = np.asanyarray(X)
+            h, s = X[..., 0], X[..., 1]
+            return self.ch / 2.0 * T ** 2 * h ** 2 + self.cs / 2.0 * T ** 2 * s ** 2
+
+        def Vtot(self, X, T, include_radiation=True):
+            return self.V0(X) + self.V1T_from_X(X, T)
+
+        def approxZeroTMin(self):
+            vacua = [np.array([0.0, 0.0]), np.array([_VEV, 0.0])]
+            tmp = self.b3 ** 2 - 4.0 * self.lamS * self.muS2
+            if tmp >= 0:
+                for sign in (+1, -1):
+                    vs = (-self.b3 + sign * np.sqrt(tmp)) / (2.0 * self.lamS)
+                    vacua.append(np.array([0.0, vs]))
+            return vacua
+
+    # Problematic parameter point from xSMnoZ2_test.py
+    return xSMnoZ2(21.093483, 4.645519e-3, 2.886256e-2, 3.642791e-1)
+
+
+@pytest.fixture(scope="session")
+def xSM_low_lamS_phases(xSM_low_lamS_instance):
+    """getPhases() result for the xSM low-λS instance, session-cached."""
+    return xSM_low_lamS_instance.getPhases()

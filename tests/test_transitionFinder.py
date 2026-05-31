@@ -327,3 +327,83 @@ class TestConformalFallback:
     def test_alpha_GW_positive(self, conformal_xSM_transitions):
         t = next(tr for tr in conformal_xSM_transitions if tr["trantype"] == 1)
         assert t["alpha_GW"] > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. getPhases — xSM low-λS phase-explosion regression
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.slow
+class TestxSMLowLambdaPhaseExplosion:
+    """
+    Regression test for the phase-explosion bug in traceMultiMin.
+
+    Model: xSM singlet extension without Z2 symmetry.
+    Parameters: MS=21.09 GeV, λS=4.65e-3, λSH=2.89e-2, b3/v=0.364.
+
+    Root cause:
+        The old coverage-detection guard in traceMultiMin used
+        ``|x1| < deltaX_target`` (field-magnitude size) to decide whether a
+        new seed was already covered by an existing phase.  For small λS the
+        singlet direction is almost flat, so fmin converges to slightly
+        different near-origin points (e.g. 0.13 GeV vs 0.005 GeV) depending
+        on the seed.  These points are all within the same basin, but the
+        old guard (threshold 0.1 GeV) was too narrow — many seeds slipped
+        through and each triggered a full new phase trace, producing 34+
+        spurious phases.
+
+    Fix:
+        Replace the size-based guard with a midpoint barrier test:
+            V(mid) - max(V(x1), V(x)) <= noise
+        Two fmin results with no potential barrier between them (same convex
+        basin) satisfy this criterion regardless of their absolute field
+        values or any constant offset added to V.  The test is therefore
+        fully shift-invariant.
+
+    Expected outcome: exactly 4 phases (EW-broken, mixed, symmetric×2).
+    Before the fix: 34+ phases.
+    """
+
+    def test_phase_count_not_exploded(self, xSM_low_lamS_phases):
+        """
+        Core regression: getPhases() must return exactly 4 phases, not 34+.
+        """
+        assert len(xSM_low_lamS_phases) == 4, (
+            f"Expected 4 phases, got {len(xSM_low_lamS_phases)}.  "
+            "Phase explosion detected — midpoint barrier fix may have regressed."
+        )
+
+    def test_all_phases_have_valid_T_range(self, xSM_low_lamS_phases):
+        """Every phase must cover a non-trivial temperature interval."""
+        for key, ph in xSM_low_lamS_phases.items():
+            assert ph.T.max() > ph.T.min(), f"Phase {key} has zero-width T range."
+
+    def test_EW_broken_phase_exists(self, xSM_low_lamS_phases):
+        """
+        At T=0 there must be a phase with h ≈ VEV ≈ 246 GeV.
+        This is the electroweak broken phase.
+        """
+        import numpy as np
+        vev_approx = 246.22
+        found = False
+        for ph in xSM_low_lamS_phases.values():
+            if ph.T.min() < 1.0:  # reaches T=0
+                x0 = ph.X[np.argmin(ph.T)]
+                if abs(x0[0]) > 100.0:  # large Higgs vev
+                    found = True
+                    break
+        assert found, "No EW-broken phase (large h vev at T=0) found."
+
+    def test_symmetric_phase_exists(self, xSM_low_lamS_phases):
+        """
+        At high temperature there must be a near-origin (symmetric) phase.
+        """
+        import numpy as np
+        found = False
+        for ph in xSM_low_lamS_phases.values():
+            if ph.T.max() > 500.0:
+                x_high = ph.X[np.argmax(ph.T)]
+                if np.linalg.norm(x_high) < 10.0:  # near origin
+                    found = True
+                    break
+        assert found, "No high-T symmetric phase found."
