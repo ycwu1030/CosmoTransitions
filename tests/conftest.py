@@ -8,6 +8,7 @@ re-running expensive phase-tracing computations multiple times.
 """
 import sys
 import os
+from types import SimpleNamespace
 import numpy as np
 import pytest
 
@@ -317,3 +318,149 @@ def xSM_low_lamS_instance():
 def xSM_low_lamS_phases(xSM_low_lamS_instance):
     """getPhases() result for the xSM low-λS instance, session-cached."""
     return xSM_low_lamS_instance.getPhases()
+
+
+# ── U1B-L model regressions (self-contained test model) ─────────────────────
+
+@pytest.fixture(scope="session")
+def u1bml_module():
+    """
+    Provide a self-contained U1B-L test model and helper.
+
+    This fixture intentionally does not import Test/BmL/U1BmL.py so that
+    tests remain hermetic and independent of ad-hoc user scripts.
+    """
+    from cosmoTransitions import generic_potential
+    from cosmoTransitions.finiteT import Jb_spline as Jb
+    from cosmoTransitions.finiteT import Jf_spline as Jf
+
+    class U1BmL(generic_potential.generic_potential):
+        def init(self, vphi, mphi, mzprime, mN):
+            self.Ndim = 1
+            self.renormScaleSq = vphi**2
+            self.vphi = vphi
+            self.mphi = mphi
+            self.ma = 0.0
+            self.mzprime = mzprime
+            self.mN = mN
+            self.nN = 1
+            self.lamphi = mphi**2 / (2.0 * vphi**2)
+            self.gBL = mzprime / (2.0 * vphi)
+            self.lamN = np.sqrt(2.0) * mN / vphi
+            self.Tmax = 1e7
+            self.x_eps = 0.001 * vphi
+
+        def forbidPhaseCrit(self, X):
+            X = np.asanyarray(X)
+            return (X[..., 0] < -5.0).any()
+
+        def V0(self, X):
+            X = np.asanyarray(X)
+            phi = X[..., 0]
+            return self.mphi**2 / (8.0 * self.vphi**2) * (phi**2 - self.vphi**2)**2
+
+        def boson_massSq(self, X, T):
+            phi = np.asanyarray(X)[..., 0]
+            m1sq = 0.5 * self.mphi**2 * (3.0 * phi**2 / self.vphi**2 - 1.0)
+            m2sq = 0.5 * self.mphi**2 * (phi**2 / self.vphi**2 - 1.0)
+            m3sq = self.mzprime**2 / self.vphi**2 * phi**2
+            massSq = np.empty(m1sq.shape + (3,))
+            massSq[..., 0] = m1sq
+            massSq[..., 1] = m2sq
+            massSq[..., 2] = m3sq
+            dof = np.array([1, 1, 3])
+            misq = np.array([self.mphi**2, self.ma**2, self.mzprime**2])
+            mu2 = np.array([self.mphi**2, self.mphi**2, self.mzprime**2])
+            cs = self.lamphi / 3.0 + self.gBL**2 + self.nN * self.lamN**2 / 12.0
+            cZ = self.gBL**2 * (21.0 + self.nN) / 6.0
+            mthermal_coeff = np.array([cs, cs, cZ])
+            return massSq, dof, misq, mu2, mthermal_coeff
+
+        def fermion_massSq(self, X):
+            phi = np.asanyarray(X)[..., 0]
+            m1sq = (self.mN / self.vphi * phi) ** 2
+            massSq = np.empty(m1sq.shape + (1,))
+            massSq[..., 0] = m1sq
+            dof = np.array([2])
+            misq = np.array([self.mN**2])
+            return massSq, dof, misq
+
+        def V1(self, bosons, fermions):
+            m2, n, misq, mu2, _ = bosons
+            y = np.sum(n * (m2 * m2 * (np.log(np.abs(m2 / mu2) + 1e-100) - 1.5) + 2.0 * m2 * misq), axis=-1)
+            m2, n, misq = fermions
+            y -= np.sum(n * (m2 * m2 * (np.log(np.abs(m2 / misq) + 1e-100) - 1.5) + 2.0 * m2 * misq), axis=-1)
+            return y / (64.0 * np.pi * np.pi)
+
+        def V1T(self, bosons, fermions, T, include_radiation=True):
+            T2 = (T * T)[..., np.newaxis] + 1e-100
+            T4 = T * T * T * T
+            m2, nb, _, _, mthermal_coeff = bosons
+            yT4 = np.sum(nb * Jb(m2 / T2), axis=-1)
+            yT = np.sum(nb * (np.abs(m2 + mthermal_coeff * T2)**1.5 - np.abs(m2)**1.5), axis=-1)
+            m2, nf, _ = fermions
+            yT4 += np.sum(nf * Jf(m2 / T2), axis=-1)
+            return yT4 * T4 / (2.0 * np.pi**2) - yT * T / (12.0 * np.pi)
+
+        def V1T_from_X(self, X, T, include_radiation=True):
+            T = np.asanyarray(T, dtype=float)
+            X = np.asanyarray(X, dtype=float)
+            return self.V1T(self.boson_massSq(X, T), self.fermion_massSq(X), T, include_radiation)
+
+        def Vtot(self, X, T, include_radiation=True):
+            T = np.asanyarray(T, dtype=float)
+            X = np.asanyarray(X, dtype=float)
+            b = self.boson_massSq(X, T)
+            f = self.fermion_massSq(X)
+            return self.V0(X) + self.V1(b, f) + self.V1T(b, f, T, include_radiation)
+
+    def is_vacuum_stable(mod):
+        vphi = mod.vphi
+        V_vev = float(mod.Vtot(np.array([vphi]), 0.0))
+        if not np.isfinite(V_vev):
+            return False
+        for factor in (3.0, 5.0, 10.0):
+            V_out = float(mod.Vtot(np.array([factor * vphi]), 0.0))
+            if not np.isfinite(V_out) or V_out <= V_vev:
+                return False
+        return True
+
+    return SimpleNamespace(U1BmL=U1BmL, is_vacuum_stable=is_vacuum_stable)
+
+
+@pytest.fixture(scope="session")
+def u1bml_reference_points():
+    """
+    Representative points used in recent debugging sessions:
+    - stable_low_mN: physically stable CW vacuum (small lamN)
+    - unstable_runaway: CW runaway due to large lamN
+    """
+    vphi = 50000.0
+    return {
+        "vphi": vphi,
+        "stable_low_mN": {
+            "mphi": 4142.4,
+            "mzprime": 59.4,
+            "mN": 63.0,
+        },
+        "unstable_runaway": {
+            "mphi": 212.6,
+            "mzprime": 316.2,
+            "mN": 27899.0,
+        },
+    }
+
+
+@pytest.fixture(scope="session")
+def u1bml_stable_instance(u1bml_module, u1bml_reference_points):
+    """
+    Stable U1BmL instance with reduced Tmax for CI/runtime sanity.
+
+    Tmax=1e6 preserves the relevant phase structure for this point while
+    avoiding pathological high-T tracing overhead seen near Tmax=1e7.
+    """
+    U1BmL = u1bml_module.U1BmL
+    p = u1bml_reference_points["stable_low_mN"]
+    mod = U1BmL(u1bml_reference_points["vphi"], p["mphi"], p["mzprime"], p["mN"])
+    mod.Tmax = 1e6
+    return mod

@@ -407,3 +407,47 @@ class TestxSMLowLambdaPhaseExplosion:
                     found = True
                     break
         assert found, "No high-T symmetric phase found."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. U1B-L model regressions (Test/BmL/U1BmL.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.slow
+class TestU1BmLRegressions:
+    """
+    Regression checks for the user U(1)_{B-L} model used during recent
+    debugging sessions.
+
+    The purpose of this block is to lock in two key behaviors:
+      1) The numerical CW-vacuum pre-filter classifies known stable/unstable
+         points correctly.
+      2) A known stable point still returns a sane getPhases() result.
+    """
+
+    def test_module_exposes_model_and_stability_filter(self, u1bml_module):
+        assert hasattr(u1bml_module, "U1BmL")
+        assert hasattr(u1bml_module, "is_vacuum_stable")
+
+    def test_stability_filter_flags_known_points(self, u1bml_module, u1bml_reference_points):
+        U1BmL = u1bml_module.U1BmL
+        is_vacuum_stable = u1bml_module.is_vacuum_stable
+        vphi = u1bml_reference_points["vphi"]
+
+        p_stable = u1bml_reference_points["stable_low_mN"]
+        mod_stable = U1BmL(vphi, p_stable["mphi"], p_stable["mzprime"], p_stable["mN"])
+        assert is_vacuum_stable(mod_stable)
+
+        p_unstable = u1bml_reference_points["unstable_runaway"]
+        mod_unstable = U1BmL(vphi, p_unstable["mphi"], p_unstable["mzprime"], p_unstable["mN"])
+        assert not is_vacuum_stable(mod_unstable)
+
+    def test_getphases_stable_point_returns_finite_phase_data(self, u1bml_stable_instance):
+        phases = u1bml_stable_instance.getPhases()
+        assert isinstance(phases, dict)
+        assert len(phases) >= 1
+
+        for key, ph in phases.items():
+            assert np.all(np.isfinite(ph.T)), f"Non-finite T values in phase {key}"
+            assert np.all(np.isfinite(ph.X)), f"Non-finite X values in phase {key}"
+            assert ph.T.max() >= ph.T.min()

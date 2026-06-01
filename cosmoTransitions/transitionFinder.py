@@ -124,14 +124,30 @@ def traceMinimum(
 
     def dxmindt(x,t):
         M = d2f_dx2(x,t)
-        if abs(linalg.det(M)) < (1e-3*np.max(abs(M)))**Ndim:
+
+        # Non-finite Hessians can appear when the traced branch runs into an
+        # unphysical runaway region; treat this like branch termination rather
+        # than propagating a hard linear-algebra exception.
+        if not np.all(np.isfinite(M)):
+            logger.debug("traceMinimum: non-finite Hessian at t=%g, x=%s", t, np.asarray(x))
+            return None, False
+
+        Mscale = np.max(np.abs(M))
+        if Mscale == 0 or abs(linalg.det(M)) < (1e-3*Mscale)**Ndim:
             # Assume matrix is singular
             return None, False
+
         b = -d2f_dxdt(x,t)
+        if not np.all(np.isfinite(b)):
+            logger.debug("traceMinimum: non-finite d2f_dxdt at t=%g, x=%s", t, np.asarray(x))
+            return None, False
+
         eigs = linalg.eigvalsh(M)
         try:
             dxdt = linalg.solve(M,b, overwrite_a=False, overwrite_b=False)
             # dxdt = linalg.solve(M,b, overwrite_a=True, overwrite_b=True)
+            if not np.all(np.isfinite(dxdt)):
+                return None, False
             isneg = ((eigs <= 0).any() or min(eigs)/max(eigs) < minratio)
         except:
             dxdt = None
