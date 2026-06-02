@@ -336,6 +336,9 @@ def traceMultiMin(
         local_min_args: dict = {},
         max_phases = None,
         max_pending_points = None,
+        enable_fast_seed_merge: bool = False,
+        fast_merge_relV_tol: float = 1e-6,
+        fast_merge_dx_factor: float = 2.0,
 ) -> dict[int, "Phase"]:
     """
     Trace multiple minima `xmin(t)` of the function `f(x,t)`.
@@ -385,6 +388,15 @@ def traceMultiMin(
         Maximum number of pending seed points allowed in the internal queue.
         If the queue grows beyond this limit, tracing stops early with a
         warning. If ``None`` (default), no explicit cap is applied.
+    enable_fast_seed_merge : bool, optional
+        If ``True``, apply a lightweight pre-check to merge clearly duplicate
+        seed points before the full coverage logic. Default is ``False`` so
+        the historical behavior is preserved.
+    fast_merge_relV_tol : float, optional
+        Relative potential tolerance used by the fast seed merge pre-check.
+    fast_merge_dx_factor : float, optional
+        Distance threshold in units of ``deltaX_target`` used by the fast
+        merge pre-check.
 
     Returns
     -------
@@ -431,6 +443,26 @@ def traceMultiMin(
 
         t1,dt1,x1,linkedFrom = nextPoint.pop()
         x1 = fmin(x1, t1)  # make sure we start as accurately as possible.
+
+        if enable_fast_seed_merge and len(phases) > 0:
+            for _pk in phases.keys():
+                phase = phases[_pk]
+                if (t1 < min(phase.T[0], phase.T[-1]) or
+                        t1 > max(phase.T[0], phase.T[-1])):
+                    continue
+                x_rep = fmin(phase.valAt(t1), t1)
+                if np.sum((x_rep - x1)**2)**0.5 > fast_merge_dx_factor * deltaX_target:
+                    continue
+                V1 = float(np.ravel(f(x1, t1))[0])
+                V2 = float(np.ravel(f(x_rep, t1))[0])
+                scale = max(abs(V1), abs(V2), 1e-30)
+                if abs(V1 - V2) / scale <= fast_merge_relV_tol:
+                    # Clearly the same local basin; skip full tracing for this seed.
+                    x1 = None
+                    break
+            if x1 is None:
+                continue
+
         # Check to see if this point is outside the bounds
         if t1 < tLow or (t1 == tLow and dt1 < 0):
             continue

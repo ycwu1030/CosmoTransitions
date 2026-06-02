@@ -116,6 +116,21 @@ class TestPotentialEvaluation:
         assert np.all(np.isfinite(vals))
 
 
+class TestTmaxHelper:
+
+    def test_set_Tmax_from_explicit_scale(self, m1):
+        tmax = m1.set_Tmax_from_scale(scale=50000.0, factor=20.0, floor=1e3)
+        assert tmax == pytest.approx(1.0e6)
+
+    def test_set_Tmax_from_scale_with_floor(self, m1):
+        tmax = m1.set_Tmax_from_scale(scale=10.0, factor=5.0, floor=1e3)
+        assert tmax == pytest.approx(1.0e3)
+
+    def test_set_Tmax_from_scale_with_hard_cap(self, m1):
+        tmax = m1.set_Tmax_from_scale(scale=50000.0, factor=30.0, floor=1e3, hard_cap=8e5)
+        assert tmax == pytest.approx(8.0e5)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Gradient
 # ─────────────────────────────────────────────────────────────────────────────

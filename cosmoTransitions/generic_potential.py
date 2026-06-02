@@ -83,6 +83,9 @@ class generic_potential():
         transitions are calculated above this temperature. This is also used
         as the overall temperature scale in :func:`getPhases`.
         May be overridden by subclasses; defaults to 1000.0.
+        For high-scale models, use :func:`set_Tmax_from_scale` to set a
+        model-appropriate value (e.g. 10-30 times a characteristic field
+        scale) instead of hard-coding a very large number.
     num_boson_dof : int or None
         Total number of bosonic degrees of freedom, including radiation.
         This is used to add a field-independent but temperature-dependent
@@ -124,6 +127,59 @@ class generic_potential():
         of dimensions in the potential with ``self.Ndim``.
         """
         pass
+
+    def set_Tmax_from_scale(
+            self,
+            scale: float | None = None,
+            factor: float = 20.0,
+            floor: float = 1e3,
+            hard_cap: float | None = None,
+    ) -> float:
+        """
+        Set ``self.Tmax`` from a characteristic model scale.
+
+        This helper is intended for models where the default ``Tmax=1000`` is
+        too low, but a manually chosen huge ``Tmax`` can trigger pathological
+        high-temperature tracing cost.
+
+        Parameters
+        ----------
+        scale : float or None
+            Characteristic field/energy scale. If ``None``, estimate from
+            ``approxZeroTMin()`` by taking the largest absolute field value.
+        factor : float
+            Multiplicative factor applied to ``scale`` (typical: 10-30).
+        floor : float
+            Minimum allowed ``Tmax``.
+        hard_cap : float or None
+            Optional upper bound for ``Tmax``.
+
+        Returns
+        -------
+        float
+            The resulting value of ``self.Tmax``.
+        """
+        if scale is None:
+            try:
+                x0 = np.asanyarray(self.approxZeroTMin(), dtype=float)
+                scale = float(np.max(np.abs(x0)))
+            except Exception:
+                scale = float(floor)
+
+        if (not np.isfinite(scale)) or scale <= 0.0:
+            scale = float(floor)
+        if (not np.isfinite(factor)) or factor <= 0.0:
+            factor = 20.0
+        if (not np.isfinite(floor)) or floor <= 0.0:
+            floor = 1e3
+
+        tmax = max(float(floor), float(factor) * float(scale))
+        if hard_cap is not None:
+            if np.isfinite(hard_cap) and hard_cap > 0.0:
+                tmax = min(tmax, float(hard_cap))
+
+        self.Tmax = float(tmax)
+        return self.Tmax
 
     # EFFECTIVE POTENTIAL CALCULATIONS -----------------------
 
@@ -551,6 +607,9 @@ class generic_potential():
                         - ``max_phases``: cap the number of traced phases before stopping.
                         - ``max_pending_points``: cap the pending seed queue length before
                             stopping.
+                        - ``enable_fast_seed_merge``: enable lightweight pre-merge of
+                            clearly duplicate seed points (default: ``False`` to preserve
+                            historical behavior).
 
                         Example::
 

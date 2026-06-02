@@ -159,6 +159,46 @@ class TestTraceMultiMinSafeguards:
         assert len(phases) <= 1
         assert any("max_phases" in rec.message for rec in caplog.records)
 
+    def test_fast_seed_merge_default_off_matches_enabled_on_simple_case(self):
+        points = [
+            [np.array([-1.0]), 0.0],
+            [np.array([+1.0]), 0.0],
+        ]
+        phases_default = transitionFinder.traceMultiMin(
+            self._f,
+            self._d2f_dxdt,
+            self._d2f_dx2,
+            points,
+            tLow=0.0,
+            tHigh=1.0,
+            deltaX_target=0.1,
+        )
+        phases_fast = transitionFinder.traceMultiMin(
+            self._f,
+            self._d2f_dxdt,
+            self._d2f_dx2,
+            points,
+            tLow=0.0,
+            tHigh=1.0,
+            deltaX_target=0.1,
+            enable_fast_seed_merge=True,
+        )
+        assert len(phases_default) == len(phases_fast)
+
+    def test_fast_seed_merge_parameter_is_accepted(self):
+        points = [[np.array([0.0]), 0.0]]
+        phases = transitionFinder.traceMultiMin(
+            self._f,
+            self._d2f_dxdt,
+            self._d2f_dx2,
+            points,
+            tLow=0.0,
+            tHigh=0.2,
+            deltaX_target=0.1,
+            enable_fast_seed_merge=False,
+        )
+        assert isinstance(phases, dict)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. getPhases — phase structure of model1
