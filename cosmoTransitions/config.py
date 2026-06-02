@@ -479,6 +479,8 @@ def _epsilon_to_params(epsilon: float) -> tuple[float, float]:
 def enable_logging(
         level: int = logging.DEBUG,
         fmt: str | None = None,
+    style: str | None = None,
+    color: bool | None = None,
         stream=None,
         log_file: str | None = None,
 ) -> logging.Logger:
@@ -495,7 +497,19 @@ def enable_logging(
     level : int
         Logging level, e.g. ``logging.DEBUG`` (default) or ``logging.INFO``.
     fmt : str or None
-        Format string.  Default: ``'[%(levelname)s %(name)s] %(message)s'``.
+        Format string. If provided, this takes precedence over ``style``.
+    style : str or None
+        Preset log format style used when ``fmt`` is not provided.
+        Supported values:
+
+        - ``"detailed"`` (default): includes timestamp, level, module,
+          function and line number.
+        - ``"compact"``: concise line-oriented output with level, module and
+          line number.
+    color : bool or None
+        Enable ANSI color output by log level for stream logging only.
+        ``None`` (default) enables color automatically when the output stream
+        is a TTY and ``log_file`` is not set.
     stream : file-like or None
         Output stream for a ``StreamHandler``.  Default: ``sys.stderr``.
         Ignored when *log_file* is given.
@@ -527,9 +541,52 @@ def enable_logging(
         cfg = TunnelingConfig(log_level=logging.INFO, log_file='run.log')
         cfg.apply_log_level()  # equivalent to enable_logging(logging.INFO, log_file='run.log')
     """
+    _style_presets = {
+        "detailed": (
+            'CTLOG %(asctime)s | %(levelname)s | '
+            '%(name)s:%(funcName)s:%(lineno)d | %(message)s'
+        ),
+        "compact": 'CTLOG %(levelname)s | %(name)s:%(lineno)d | %(message)s',
+    }
+
     if fmt is None:
-        fmt = '[%(levelname)s %(name)s] %(message)s'
-    formatter = logging.Formatter(fmt)
+        if style is None:
+            style = "detailed"
+        if style not in _style_presets:
+            raise ValueError(
+                f"Unknown logging style: {style!r}. "
+                f"Supported values: {sorted(_style_presets.keys())}."
+            )
+        fmt = _style_presets[style]
+
+    class _LevelColorFormatter(logging.Formatter):
+        _COLORS = {
+            logging.DEBUG: "\x1b[90m",       # bright black / gray
+            logging.INFO: "\x1b[36m",        # cyan
+            logging.WARNING: "\x1b[33m",     # yellow
+            logging.ERROR: "\x1b[31m",       # red
+            logging.CRITICAL: "\x1b[1;37;41m" # bold white on red background
+        }
+        _RESET = "\x1b[0m"
+
+        def format(self, record):
+            msg = super().format(record)
+            code = self._COLORS.get(record.levelno)
+            if code:
+                return f"{code}{msg}{self._RESET}"
+            return msg
+
+    target_stream = stream if stream is not None else sys.stderr
+    if color is None:
+        color = (log_file is None and
+                 hasattr(target_stream, "isatty") and
+                 target_stream.isatty())
+
+    if color and log_file is None:
+        formatter = _LevelColorFormatter(fmt, datefmt='%Y-%m-%d %H:%M:%S')
+    else:
+        formatter = logging.Formatter(fmt, datefmt='%Y-%m-%d %H:%M:%S')
+
     pkg_logger = logging.getLogger('cosmoTransitions')
     pkg_logger.setLevel(level)
 
@@ -548,12 +605,11 @@ def enable_logging(
             pkg_logger.addHandler(fh)
     else:
         # StreamHandler — avoid attaching a second handler to the same stream.
-        target_stream = stream
         _already_has = any(
             isinstance(h, logging.StreamHandler)
             and not isinstance(h, logging.FileHandler)  # FileHandler is a subclass
             and getattr(h, 'stream', None) is (
-                target_stream if target_stream is not None else sys.stderr
+                target_stream
             )
             for h in pkg_logger.handlers
         )

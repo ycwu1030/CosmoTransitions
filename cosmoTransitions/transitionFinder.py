@@ -334,6 +334,8 @@ def traceMultiMin(
         forbidCrit: Callable[[np.ndarray], bool] | None = None,
         single_trace_args: dict = {},
         local_min_args: dict = {},
+        max_phases = None,
+        max_pending_points = None,
 ) -> dict[int, "Phase"]:
     """
     Trace multiple minima `xmin(t)` of the function `f(x,t)`.
@@ -376,6 +378,13 @@ def traceMultiMin(
         Arguments to pass to :func:`traceMinimum`.
     local_min_args : dict, optoinal
         Arguments to pass to :func:`findApproxLocalMinima`.
+    max_phases : int or None, optional
+        Maximum number of phases to construct before stopping early.
+        If ``None`` (default), no explicit cap is applied.
+    max_pending_points : int or None, optional
+        Maximum number of pending seed points allowed in the internal queue.
+        If the queue grows beyond this limit, tracing stops early with a
+        warning. If ``None`` (default), no explicit cap is applied.
 
     Returns
     -------
@@ -399,7 +408,27 @@ def traceMultiMin(
         x,t = p
         nextPoint.append([t,dtstart,fmin(x,t),None])
 
+    if max_phases is not None or max_pending_points is not None:
+        logger.info(
+            "traceMultiMin: safeguards enabled (max_phases=%s, max_pending_points=%s)",
+            str(max_phases), str(max_pending_points)
+        )
+
     while len(nextPoint) != 0:
+        if max_pending_points is not None and len(nextPoint) > max_pending_points:
+            logger.warning(
+                "traceMultiMin: pending queue length %d exceeded max_pending_points=%d; "
+                "stopping early.",
+                len(nextPoint), max_pending_points
+            )
+            break
+        if max_phases is not None and len(phases) >= max_phases:
+            logger.warning(
+                "traceMultiMin: reached max_phases=%d; stopping early.",
+                max_phases
+            )
+            break
+
         t1,dt1,x1,linkedFrom = nextPoint.pop()
         x1 = fmin(x1, t1)  # make sure we start as accurately as possible.
         # Check to see if this point is outside the bounds

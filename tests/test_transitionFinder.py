@@ -101,6 +101,65 @@ class TestTraceMinimum:
             assert hasattr(result, field), f"traceMinimum result missing '{field}'"
 
 
+class TestTraceMultiMinSafeguards:
+    """Regression tests for optional queue/phase caps in traceMultiMin."""
+
+    @staticmethod
+    def _f(x, T):
+        # Two well-separated minima around x ~= +/-1 for a broad T range.
+        x = np.asanyarray(x)
+        return (x[..., 0] ** 2 - 1.0) ** 2 + 1e-3 * T * x[..., 0]
+
+    @staticmethod
+    def _d2f_dx2(x, T):
+        xv = np.asanyarray(x)[0]
+        return np.array([[12.0 * xv * xv - 4.0]])
+
+    @staticmethod
+    def _d2f_dxdt(x, T):
+        return np.array([1e-3])
+
+    def test_max_pending_points_stops_early_with_warning(self, caplog):
+        points = [
+            [np.array([-1.0]), 0.0],
+            [np.array([+1.0]), 0.0],
+            [np.array([0.0]), 0.0],
+        ]
+        with caplog.at_level("WARNING", logger="cosmoTransitions.transitionFinder"):
+            phases = transitionFinder.traceMultiMin(
+                self._f,
+                self._d2f_dxdt,
+                self._d2f_dx2,
+                points,
+                tLow=0.0,
+                tHigh=1.0,
+                deltaX_target=0.1,
+                max_pending_points=1,
+            )
+        assert isinstance(phases, dict)
+        assert any("max_pending_points" in rec.message for rec in caplog.records)
+
+    def test_max_phases_caps_phase_growth(self, caplog):
+        points = [
+            [np.array([-1.0]), 0.0],
+            [np.array([+1.0]), 0.0],
+        ]
+        with caplog.at_level("WARNING", logger="cosmoTransitions.transitionFinder"):
+            phases = transitionFinder.traceMultiMin(
+                self._f,
+                self._d2f_dxdt,
+                self._d2f_dx2,
+                points,
+                tLow=0.0,
+                tHigh=1.0,
+                deltaX_target=0.1,
+                max_phases=1,
+            )
+        assert isinstance(phases, dict)
+        assert len(phases) <= 1
+        assert any("max_phases" in rec.message for rec in caplog.records)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. getPhases — phase structure of model1
 # ─────────────────────────────────────────────────────────────────────────────

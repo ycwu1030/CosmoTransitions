@@ -545,7 +545,19 @@ class generic_potential():
         Parameters
         ----------
         tracingArgs : dict
-            Parameters to pass to :func:`transitionFinder.traceMultiMin`.
+                        Parameters to pass to :func:`transitionFinder.traceMultiMin`.
+                        Common optional safeguards include:
+
+                        - ``max_phases``: cap the number of traced phases before stopping.
+                        - ``max_pending_points``: cap the pending seed queue length before
+                            stopping.
+
+                        Example::
+
+                                phases = model.getPhases(tracingArgs={
+                                        "max_phases": 2000,
+                                        "max_pending_points": 5000,
+                                })
 
         Returns
         -------

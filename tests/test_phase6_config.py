@@ -11,12 +11,15 @@ Covers:
 """
 
 import math
+import io
+import logging
 import numpy as np
 import pytest
 
 from cosmoTransitions import tunneling1D as t1
 from cosmoTransitions.config import (
     TunnelingConfig,
+    enable_logging,
     _epsilon_to_params,
     _PROFILE_PARAM_TIERS,
     fixed_140_nucl_criterion,
@@ -133,6 +136,28 @@ class TestNuclCriterion:
         cfg = TunnelingConfig(nuclCriterion="unknown_criterion")
         with pytest.raises(ValueError):
             cfg.get_nucl_criterion()
+
+
+class TestEnableLoggingStyles:
+    def test_compact_style_to_stream(self):
+        s = io.StringIO()
+        logger = enable_logging(level=logging.INFO, style="compact", stream=s, color=False)
+        logger.info("hello-style")
+        out = s.getvalue()
+        assert "CTLOG INFO |" in out
+        assert "hello-style" in out
+
+    def test_color_forced_on_stream(self):
+        s = io.StringIO()
+        logger = enable_logging(level=logging.INFO, stream=s, color=True)
+        logger.info("hello-color")
+        out = s.getvalue()
+        assert "\x1b[" in out  # ANSI escape sequence
+        assert "hello-color" in out
+
+    def test_unknown_style_raises(self):
+        with pytest.raises(ValueError):
+            enable_logging(style="unknown-style", color=False)
 
 
 # -----------------------------------------------------------------------
